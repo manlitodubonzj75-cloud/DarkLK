@@ -1,0 +1,149 @@
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Icons } from './Icons';
+
+/**
+ * Universal native-feeling Pull-to-Refresh container:
+ * - Engages when swiping down from top of screen
+ * - Tactile spring resistance and rotation indicator
+ * - Dispatches 'app-pull-to-refresh' event and executes callback
+ */
+export const PullToRefresh = ({ children, onRefresh }) => {
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const startY = useRef(0);
+  const currentY = useRef(0);
+  const isDragging = useRef(false);
+  const containerRef = useRef(null);
+
+  const TRIGGER_THRESHOLD = 65; // px to trigger refresh
+  const MAX_PULL = 90;
+
+  const handleTouchStart = (e) => {
+    if (isRefreshing) return;
+    const scrollElem = containerRef.current;
+    // Only activate if we are scrolled to the very top
+    if (scrollElem && scrollElem.scrollTop > 2) return;
+    if (window.scrollY > 2) return;
+
+    startY.current = e.touches[0].clientY;
+    currentY.current = e.touches[0].clientY;
+    isDragging.current = true;
+  };
+
+  const handleTouchMove = (e) => {
+    if (!isDragging.current || isRefreshing) return;
+    const scrollElem = containerRef.current;
+    if (scrollElem && scrollElem.scrollTop > 2) {
+      isDragging.current = false;
+      setPullDistance(0);
+      return;
+    }
+
+    currentY.current = e.touches[0].clientY;
+    const diff = currentY.current - startY.current;
+
+    if (diff > 0) {
+      // Damped pull curve
+      const distance = Math.min(diff * 0.45, MAX_PULL);
+      setPullDistance(distance);
+      // Prevent default browser bounce if supported
+      if (diff > 10 && e.cancelable) {
+        // Allow passive handling where possible
+      }
+    } else {
+      setPullDistance(0);
+    }
+  };
+
+  const executeRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    setPullDistance(TRIGGER_THRESHOLD);
+    
+    // Light haptic feedback if available on mobile
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      try { navigator.vibrate(15); } catch (_) {}
+    }
+
+    const minDelay = new Promise(resolve => setTimeout(resolve, 750));
+    const refreshTask = onRefresh 
+      ? Promise.resolve(onRefresh()) 
+      : new Promise(resolve => {
+          window.dispatchEvent(new CustomEvent('app-pull-to-refresh'));
+          setTimeout(resolve, 600);
+        });
+
+    try {
+      await Promise.all([refreshTask, minDelay]);
+    } catch (err) {
+      console.warn('Pull-to-refresh execution error:', err);
+    } finally {
+      setIsRefreshing(false);
+      setPullDistance(0);
+    }
+  }, [onRefresh]);
+
+  const handleTouchEnd = () => {
+    if (!isDragging.current) return;
+    isDragging.current = false;
+
+    if (pullDistance >= TRIGGER_THRESHOLD) {
+      executeRefresh();
+    } else {
+      setPullDistance(0);
+    }
+  };
+
+  // Expose manual trigger via window event for desktop / shortcuts
+  useEffect(() => {
+    const handleTrigger = () => {
+      if (!isRefreshing) executeRefresh();
+    };
+    window.addEventListener('trigger-app-refresh', handleTrigger);
+    return () => window.removeEventListener('trigger-app-refresh', handleTrigger);
+  }, [executeRefresh, isRefreshing]);
+
+  return (
+    <div
+      ref={containerRef}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      className="relative w-full h-full overflow-y-auto overflow-x-hidden flex-1"
+      style={{ WebkitOverflowScrolling: 'touch' }}
+    >
+      {/* Pull Indicator Badge */}
+      <div
+        className={`absolute left-0 right-0 top-0 flex items-center justify-center pointer-events-none z-30 transition-transform duration-150 ${
+          isRefreshing ? 'transition-all duration-300' : ''
+        }`}
+        style={{
+          transform: `translateY(${pullDistance > 0 ? pullDistance - 45 : -60}px)`,
+          opacity: pullDistance > 10 ? Math.min(pullDistance / TRIGGER_THRESHOLD, 1) : 0
+        }}
+      >
+        <div className="flex items-center space-x-2 px-4 py-2 rounded-full bg-card dark:bg-[#1F2430] border border-border dark:border-[#2B3242] shadow-md text-xs font-bold text-dark dark:text-white">
+          <div className={isRefreshing ? 'animate-spin text-primary dark:text-[#38BDF8]' : 'text-primary dark:text-[#38BDF8]'}>
+            <Icons.Refresh size={16} className={!isRefreshing && pullDistance >= TRIGGER_THRESHOLD ? 'rotate-180 transition-transform' : ''} />
+          </div>
+          <span>
+            {isRefreshing 
+              ? 'Обновление данных...' 
+              : pullDistance >= TRIGGER_THRESHOLD 
+              ? 'Отпустите для обновления' 
+              : 'Потяните вниз для обновления'}
+          </span>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div
+        className="w-full min-w-0 transition-transform duration-150"
+        style={{
+          transform: pullDistance > 0 ? `translateY(${Math.min(pullDistance * 0.4, 30)}px)` : 'none'
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+};
