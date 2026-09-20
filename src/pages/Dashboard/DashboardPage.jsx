@@ -1,46 +1,32 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import * as Icons from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { lkService, cacheService, formatLessonTime, formatDisplayDate } from '../../api';
-import { Card } from '../../components/common/Card';
-import { Badge } from '../../components/common/Badge';
-import { Icons } from '../../components/common/Icons';
-import { LoadingSpinner } from '../../components/common/LoadingSpinner';
-
-function getPairWord(count) {
-  const n = Math.abs(Number(count) || 0) % 100;
-  const n1 = n % 10;
-  if (n > 10 && n < 20) return 'пар';
-  if (n1 > 1 && n1 < 5) return 'пары';
-  if (n1 === 1) return 'пара';
-  return 'пар';
-}
+import { lkService, formatISODate, formatLessonTime, getMondayOfWeek } from '../../api';
+import { cacheService } from '../../api';
+import { PullToRefresh } from '../../components/common/PullToRefresh';
 
 export const DashboardPage = () => {
-  const navigate = useNavigate();
   const { user, isCollege } = useAuth();
+  const navigate = useNavigate();
 
   const now = new Date();
-  const todayISO = now.toISOString().split('T')[0];
-
-  // Current calendar week (Monday to Sunday)
-  const currentDay = now.getDay();
-  const distanceToMonday = currentDay === 0 ? -6 : 1 - currentDay;
-  const monday = new Date(now);
-  monday.setDate(now.getDate() + distanceToMonday);
+  const todayISO = formatISODate(now);
+  const monday = getMondayOfWeek(now);
+  const mondayISO = formatISODate(monday);
   const sunday = new Date(monday);
   sunday.setDate(monday.getDate() + 6);
-
-  const mondayISO = monday.toISOString().split('T')[0];
-  const sundayISO = sunday.toISOString().split('T')[0];
+  const sundayISO = formatISODate(sunday);
   const scheduleCacheKey = `schedule_${mondayISO}_${sundayISO}`;
 
-  // 1. Instant Cache-First State Initialization
+  // 1. Synchronous Instant State Initialization from Encrypted Cache
   const [scheduleToday, setScheduleToday] = useState(() => {
     const cachedWeek = cacheService.get(scheduleCacheKey);
-    if (Array.isArray(cachedWeek) && cachedWeek.length > 0) {
+    if (Array.isArray(cachedWeek)) {
       const todayItem = cachedWeek.find(day => day.title === todayISO);
-      if (todayItem && Array.isArray(todayItem.data)) return todayItem.data;
+      if (todayItem && Array.isArray(todayItem.data)) {
+        return todayItem.data;
+      }
     }
     return [];
   });
@@ -82,13 +68,14 @@ export const DashboardPage = () => {
   useEffect(() => {
     let isMounted = true;
 
-    async function loadDashboardData() {
+    async function loadDashboardData(forceRefresh = false) {
+      const fetchOpts = { forceRefresh, ttl: 300000 };
       try {
         const [weekSchedule, progressInfo, studentInfoResp, newsData] = await Promise.allSettled([
-          lkService.getScheduleWeek(monday),
-          lkService.getProgressWithLessons(user),
-          !isCollege ? lkService.getStudentInfo() : Promise.resolve({}),
-          lkService.getNews()
+          lkService.getScheduleWeek(monday, fetchOpts),
+          lkService.getProgressWithLessons(user, fetchOpts),
+          !isCollege ? lkService.getStudentInfo(fetchOpts) : Promise.resolve({}),
+          lkService.getNews(fetchOpts)
         ]);
 
         if (!isMounted) return;
@@ -135,11 +122,7 @@ export const DashboardPage = () => {
     loadDashboardData();
 
     const handlePullRefresh = () => {
-      cacheService.remove(scheduleCacheKey);
-      cacheService.remove('student_info');
-      cacheService.remove('progress_with_lessons_latest');
-      cacheService.remove('news_preview');
-      loadDashboardData();
+      loadDashboardData(true);
     };
 
     window.addEventListener('app-pull-to-refresh', handlePullRefresh);
@@ -158,315 +141,278 @@ export const DashboardPage = () => {
   ];
 
   const QUICK_ACTIONS = isCollege
-    ? ALL_QUICK_ACTIONS.filter(item => item.path !== '/consultations')
+    ? ALL_QUICK_ACTIONS.filter(action => action.path !== '/consultations')
     : ALL_QUICK_ACTIONS;
 
-  const displayName = typeof user?.name === 'string' && user.name.trim()
-    ? (user.name.split(' ')[1] || user.name.split(' ')[0])
-    : 'Студент';
-
-  const displayRating = typeof stats.rating === 'object' ? '—' : String(stats.rating ?? '—');
-  const displayPasses = typeof stats.passes === 'object' ? (stats.passes?.total ?? 0) : Number(stats.passes ?? 0);
+  const handleLessonAction = (lesson) => {
+    if (lesson.isConsultation) {
+      navigate('/consultations');
+    } else {
+      navigate('/schedule', { state: { targetDate: todayISO } });
+    }
+  };
 
   return (
-    <div className="space-y-6 pb-6">
-      {/* Greeting Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-textMuted">
-            {new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}
-          </p>
-          <h1 className="text-2xl font-black text-dark mt-0.5">
-            Привет, {displayName} 👋
-          </h1>
-          <p className="text-xs text-textMuted mt-1">
-            {user?.department || user?.faculty || 'МГЮА им. О.Е. Кутафина'} • {user?.group || user?.role || ''}
-          </p>
-        </div>
-      </div>
-
-      {/* Quick Action Navigation */}
-      <div>
-        <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted mb-3">
-          Быстрый доступ
-        </h3>
-        <div className={`grid ${isCollege ? 'grid-cols-3' : 'grid-cols-4'} gap-3`}>
-          {QUICK_ACTIONS.map(action => {
-            const Icon = action.icon;
-            return (
-              <button
-                key={action.path}
-                onClick={() => navigate(action.path)}
-                className="flex flex-col items-center justify-center p-3 rounded-2xl bg-card border border-border dark:border-[#2B3242] hover:border-accent dark:hover:border-[#38BDF8] hover:shadow-sm transition-all text-center group"
-              >
-                <div className={`w-10 h-10 rounded-xl ${action.color} text-white flex items-center justify-center mb-2 shadow-sm group-hover:scale-105 transition-transform`}>
-                  <Icon size={20} />
-                </div>
-                <span className="text-xs font-bold text-dark">{action.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Academic Highlights: Student Rating & Passes */}
-      <div className="grid grid-cols-2 gap-3 sm:gap-4">
-        <Card className="p-3.5 sm:p-4 flex items-center space-x-3 border border-border dark:border-[#2B3242]">
-          <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary dark:text-[#38BDF8] flex items-center justify-center shrink-0">
-            {isCollege ? <Icons.GraduationCap size={22} /> : <Icons.Award size={22} />}
-          </div>
-          <div className="min-w-0">
-            <p className="text-xs text-textMuted dark:text-[#8E98A8] font-medium truncate">
-              {isCollege ? 'Средний балл' : 'Рейтинг'}
+    <PullToRefresh>
+      <div className="space-y-6 pb-12 animate-in fade-in duration-300">
+        {/* Profile Card & Avatar */}
+        <div className="bg-surface dark:bg-[#1C2433] rounded-2xl p-5 border border-border/40 dark:border-[#283245]/60 shadow-sm flex items-center justify-between">
+          <div className="space-y-1">
+            <span className="text-xs font-semibold text-primary dark:text-[#4E80EE] uppercase tracking-wider">
+              {isCollege ? 'Колледж МГЮА' : 'Студент МГЮА'}
+            </span>
+            <h1 className="text-xl font-bold text-text dark:text-[#F1F5F9]">
+              {user?.fio || user?.name || 'Студент'}
+            </h1>
+            <p className="text-xs text-textMuted dark:text-[#8E98A8]">
+              {user?.group || user?.groupName ? `Группа ${user.group || user.groupName}` : ''}
+              {user?.course ? ` • ${user.course} курс` : ''}
+              {user?.faculty ? ` • ${user.faculty}` : ''}
             </p>
-            <h4 className="text-lg sm:text-xl font-black text-dark dark:text-white mt-0.5 truncate">
-              {stats.loading ? '—' : displayRating}
-            </h4>
           </div>
-        </Card>
+          <div className="w-12 h-12 rounded-full bg-primary/10 dark:bg-primary/20 text-primary dark:text-[#4E80EE] flex items-center justify-center font-bold text-lg border border-primary/20">
+            {(user?.fio || user?.name || 'С')[0]}
+          </div>
+        </div>
 
-        {/* Absences Card: for College, counts missed pairs strictly and opens details popup */}
-        <Card
-          onClick={isCollege ? () => setShowMissedModal(true) : undefined}
-          role={isCollege ? 'button' : undefined}
-          tabIndex={isCollege ? 0 : undefined}
-          onKeyDown={isCollege ? (e) => (e.key === 'Enter' || e.key === ' ') && setShowMissedModal(true) : undefined}
-          className={`p-3.5 sm:p-4 flex items-center space-x-3 border border-border dark:border-[#2B3242] ${
-            isCollege
-              ? 'cursor-pointer hover:border-accent dark:hover:border-[#38BDF8] hover:shadow-md transition-all active:scale-[0.98]'
-              : ''
-          }`}
-        >
-          <div className="w-10 h-10 rounded-xl bg-accent/10 text-accent dark:text-[#38BDF8] flex items-center justify-center shrink-0">
-            <Icons.Clock size={22} />
+        {/* Stats Row */}
+        <div className={`grid ${isCollege ? 'grid-cols-3' : 'grid-cols-4'} gap-3`}>
+          <div className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between">
+            <span className="text-xs text-textMuted dark:text-[#8E98A8]">Курс</span>
+            <span className="text-2xl font-bold text-text dark:text-[#F1F5F9] mt-1">
+              {user?.course || '1'}
+            </span>
           </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center justify-between">
-              <p className="text-xs text-textMuted dark:text-[#8E98A8] font-medium truncate">
-                {isCollege ? 'Пропущенные пары' : 'Пропуски (акад. ч)'}
-              </p>
-              {isCollege && (
-                <span className="text-[10px] text-accent dark:text-[#38BDF8] font-semibold hidden sm:inline ml-1">
-                  список →
-                </span>
-              )}
+          {!isCollege && (
+            <div className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between">
+              <span className="text-xs text-textMuted dark:text-[#8E98A8]">Семестр</span>
+              <span className="text-2xl font-bold text-text dark:text-[#F1F5F9] mt-1">
+                {user?.semester || '1'}
+              </span>
             </div>
-            <h4 className="text-lg sm:text-xl font-black text-dark dark:text-white mt-0.5 truncate">
-              {stats.loading ? '—' : displayPasses}
-            </h4>
+          )}
+          <div className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between">
+            <div className="flex items-center justify-between text-secondary dark:text-emerald-400">
+              <span className="text-xs text-textMuted dark:text-[#8E98A8]">
+                {isCollege ? 'Средний балл' : 'Рейтинг'}
+              </span>
+              {isCollege ? <Icons.GraduationCap size={16} /> : <Icons.Award size={16} />}
+            </div>
+            <span className="text-2xl font-bold text-text dark:text-[#F1F5F9] mt-1">
+              {stats.loading ? '—' : stats.rating}
+            </span>
           </div>
-        </Card>
-      </div>
-
-      {/* Modal / Popup with Missed Pairs for College */}
-      {isCollege && showMissedModal && (
-        <div
-          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
-          onClick={() => setShowMissedModal(false)}
-        >
           <div
-            className="bg-card dark:bg-[#1F2430] border border-border dark:border-[#2B3242] rounded-2xl max-w-md w-full shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-scale-up"
-            onClick={(e) => e.stopPropagation()}
+            onClick={isCollege ? () => setShowMissedModal(true) : undefined}
+            role={isCollege ? 'button' : undefined}
+            tabIndex={isCollege ? 0 : undefined}
+            onKeyDown={isCollege ? (e) => (e.key === 'Enter' || e.key === ' ') && setShowMissedModal(true) : undefined}
+            className={`bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between transition-all ${
+              isCollege
+                ? 'cursor-pointer hover:border-accent/40 active:scale-[0.98]'
+                : ''
+            }`}
           >
-            {/* Modal Header */}
-            <div className="p-4 sm:p-5 border-b border-border dark:border-[#2B3242] flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <div className="w-8 h-8 rounded-lg bg-accent/10 text-accent dark:text-[#38BDF8] flex items-center justify-center">
-                  <Icons.Clock size={18} />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-dark dark:text-white">Пропущенные пары</h3>
-                  <p className="text-xs text-textMuted dark:text-[#8E98A8]">
-                    Всего: {displayPasses} {getPairWord(displayPasses)}
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowMissedModal(false)}
-                className="w-8 h-8 rounded-lg flex items-center justify-center text-textMuted hover:text-dark dark:text-[#8E98A8] dark:hover:text-white hover:bg-bg dark:hover:bg-[#181C26] transition-colors"
-              >
-                <Icons.X size={18} />
-              </button>
+            <div className="flex items-center justify-between text-accent">
+              <span className="text-xs text-textMuted dark:text-[#8E98A8]">
+                {isCollege ? 'Пропуски' : 'Пропуски (ч)'}
+              </span>
+              <Icons.Clock size={16} />
             </div>
-
-            {/* Modal Body */}
-            <div className="p-4 sm:p-5 overflow-y-auto space-y-2.5 flex-1">
-              {stats.loading ? (
-                <div className="py-8">
-                  <LoadingSpinner size={8} text="Загрузка пропущенных пар..." />
-                </div>
-              ) : stats.missedLessons && stats.missedLessons.length > 0 ? (
-                stats.missedLessons.map((item, idx) => (
-                  <div
-                    key={idx}
-                    className="p-3 rounded-xl bg-bg dark:bg-[#181C26] border border-border dark:border-[#2B3242] flex items-start justify-between gap-3"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <h4 className="font-bold text-xs sm:text-sm text-dark dark:text-white leading-tight">
-                        {item.discipline}
-                      </h4>
-                      {item.teacher && (
-                        <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-1 truncate">
-                          {item.teacher}
-                        </p>
-                      )}
-                      {item.subgroup > 0 && (
-                        <span className="inline-block mt-1 text-[10px] px-1.5 py-0.5 rounded bg-card dark:bg-[#1F2430] border border-border dark:border-[#2B3242] text-textMuted dark:text-[#8E98A8]">
-                          Подгруппа {item.subgroup}
-                        </span>
-                      )}
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <span className="inline-block px-2.5 py-1 rounded-lg bg-red-500/10 text-red-600 dark:text-red-400 font-bold text-xs">
-                        {item.date}
-                      </span>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="text-center py-8">
-                  <div className="w-14 h-14 rounded-full bg-emerald-500/10 text-emerald-500 mx-auto flex items-center justify-center mb-3">
-                    <Icons.Check size={28} />
-                  </div>
-                  <h4 className="font-bold text-base text-dark dark:text-white">Пропусков нет!</h4>
-                  <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-1">
-                    Отличная посещаемость, ни одного пропуска занятий 🎉
-                  </p>
-                </div>
+            <div className="flex items-baseline justify-between mt-1">
+              <span className="text-2xl font-bold text-text dark:text-[#F1F5F9]">
+                {stats.loading ? '0' : stats.passes}
+              </span>
+              {isCollege && (
+                <span className="text-[10px] text-accent font-medium">детали</span>
               )}
-            </div>
-
-            {/* Modal Footer */}
-            <div className="p-3.5 bg-bg/50 dark:bg-[#181C26]/50 border-t border-border dark:border-[#2B3242] text-right">
-              <button
-                onClick={() => setShowMissedModal(false)}
-                className="px-4 py-1.5 rounded-xl bg-primary dark:bg-[#1E6685] text-white text-xs font-bold hover:opacity-90 transition-opacity"
-              >
-                Понятно
-              </button>
             </div>
           </div>
         </div>
-      )}
 
-      {/* Today Schedule Preview */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted">
-            Занятия на сегодня
-          </h3>
-          <button
-            onClick={() => navigate('/schedule')}
-            className="text-xs font-bold text-secondary hover:underline"
-          >
-            Все занятия →
-          </button>
-        </div>
-
-        {isLoading ? (
-          <Card className="p-8 text-center">
-            <LoadingSpinner size={8} text="Загрузка занятий..." />
-          </Card>
-        ) : scheduleToday.length === 0 ? (
-          <Card className="p-8 text-center">
-            <div className="w-12 h-12 rounded-full bg-accent/10 mx-auto flex items-center justify-center text-accent mb-3">
-              <Icons.Calendar size={24} />
-            </div>
-            <h4 className="text-base font-bold text-dark">Сегодня занятий нет</h4>
-            <p className="text-xs text-textMuted mt-1">Отличный день для подготовки или отдыха!</p>
-          </Card>
-        ) : (
-          <div className="space-y-3">
-            {scheduleToday.map((lesson, idx) => {
-              const disciplineTitle = typeof (lesson.discipline || lesson.subject) === 'object'
-                ? JSON.stringify(lesson.discipline || lesson.subject)
-                : String(lesson.discipline || lesson.subject || 'Занятие');
-
+        {/* Quick Actions */}
+        <div>
+          <h2 className="text-sm font-semibold text-textMuted dark:text-[#8E98A8] mb-3 uppercase tracking-wider">
+            Быстрый доступ
+          </h2>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {QUICK_ACTIONS.map(action => {
+              const IconComponent = action.icon;
               return (
-                <Card key={lesson.id || idx} className="p-4 sm:p-5 hover:border-accent transition-colors overflow-hidden w-full min-w-0">
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2 w-full min-w-0">
-                    <div className="px-2.5 py-1 rounded-lg bg-primary/10 text-primary font-bold text-xs sm:text-sm shrink-0">
-                      {formatLessonTime(lesson) || "Пара"}
-                    </div>
-                    <div className="flex flex-wrap items-center justify-end gap-1.5 min-w-0 max-w-[60%] sm:max-w-none">
-                      {lesson.type && (
-                        <Badge 
-                          type={lesson.type.toLowerCase().includes('лек') ? 'info' : 'secondary'}
-                          className="shrink-0 text-xs"
-                        >
-                          {lesson.type}
-                        </Badge>
-                      )}
-                      {lesson.corps && (
-                        <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-bg text-textMuted border border-border shrink-0">
-                          {lesson.corps}
-                        </span>
-                      )}
-                    </div>
+                <button
+                  key={action.path}
+                  onClick={() => navigate(action.path)}
+                  className="flex items-center p-3 bg-surface dark:bg-[#1C2433] rounded-xl border border-border/40 dark:border-[#283245]/60 hover:bg-slate-50 dark:hover:bg-[#232D3F] transition-all text-left group active:scale-[0.98]"
+                >
+                  <div className={`w-10 h-10 rounded-lg ${action.color} flex items-center justify-center text-white mr-3 shrink-0 group-hover:scale-105 transition-transform`}>
+                    <IconComponent size={20} />
                   </div>
-
-                  <h4 className="font-bold text-base sm:text-lg text-dark mb-1 break-words">
-                    {disciplineTitle}
-                  </h4>
-
-                  <div className="flex flex-wrap items-center justify-between text-xs text-textMuted pt-2 border-t border-border mt-3 gap-2">
-                    <span className="text-secondary font-semibold">
-                      {lesson.auditory ? `Ауд. ${lesson.auditory}` : 'Аудитория уточняется'}
-                    </span>
-                    <span>
-                      {lesson.teacher || 'Преподаватель кафедры'}
-                    </span>
-                  </div>
-                </Card>
+                  <span className="font-semibold text-sm text-text dark:text-[#F1F5F9]">
+                    {action.label}
+                  </span>
+                </button>
               );
             })}
           </div>
-        )}
-      </div>
+        </div>
 
-      {/* News Preview */}
-      {news.length > 0 && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted">
-              Новости Университета
-            </h3>
+        {/* Today's Schedule */}
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-textMuted dark:text-[#8E98A8] uppercase tracking-wider">
+              Занятия на сегодня
+            </h2>
             <button
-              onClick={() => navigate('/news')}
-              className="text-xs font-bold text-secondary hover:underline"
+              onClick={() => navigate('/schedule')}
+              className="text-xs font-semibold text-primary dark:text-[#4E80EE] hover:underline"
             >
-              Все новости →
+              Вся неделя →
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {news.map((item, idx) => (
-              <Card
-                key={item.id || idx}
-                onClick={() => navigate(`/news/${item.id || idx}`)}
-                className="p-4 hover:border-accent transition-all cursor-pointer flex flex-col justify-between"
-              >
-                <div>
-                  <span className="text-[10px] font-bold text-textMuted uppercase tracking-wider">
-                    {formatDisplayDate(item.date || item.created_at)}
-                  </span>
-                  <h4 className="font-bold text-sm text-dark mt-1 line-clamp-2">
-                    {item.title}
-                  </h4>
-                  {item.preview && (
-                    <p className="text-xs text-textMuted mt-1 line-clamp-2">
-                      {item.preview}
-                    </p>
-                  )}
-                </div>
-                <div className="mt-3 text-xs font-bold text-accent flex items-center">
-                  Читать далее →
-                </div>
-              </Card>
-            ))}
-          </div>
+          {isLoading ? (
+            <div className="bg-surface dark:bg-[#1C2433] rounded-2xl p-8 border border-border/40 dark:border-[#283245]/60 text-center">
+              <div className="animate-spin w-6 h-6 border-2 border-primary border-t-transparent rounded-full mx-auto mb-2" />
+              <p className="text-xs text-textMuted dark:text-[#8E98A8]">Синхронизация с расписанием...</p>
+            </div>
+          ) : scheduleToday.length === 0 ? (
+            <div className="bg-surface dark:bg-[#1C2433] rounded-2xl p-8 border border-border/40 dark:border-[#283245]/60 text-center">
+              <Icons.Coffee className="w-8 h-8 text-secondary dark:text-emerald-400 mx-auto mb-2 opacity-80" />
+              <h3 className="font-semibold text-text dark:text-[#F1F5F9] text-sm">Пар на сегодня нет</h3>
+              <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-1">Отличный день для отдыха или самостоятельной подготовки!</p>
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {scheduleToday.map((lesson, idx) => {
+                const timeString = formatLessonTime(lesson);
+                return (
+                  <div
+                    key={lesson.id || idx}
+                    onClick={() => handleLessonAction(lesson)}
+                    className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 hover:border-primary/40 dark:hover:border-primary/30 transition-all cursor-pointer flex items-start gap-3.5 group active:scale-[0.99]"
+                  >
+                    <div className="w-1.5 self-stretch rounded-full bg-primary dark:bg-[#4E80EE] shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-primary dark:text-[#4E80EE]">
+                          {timeString || 'Пара'}
+                        </span>
+                        {lesson.classroom && (
+                          <span className="text-xs font-medium px-2 py-0.5 rounded-md bg-slate-100 dark:bg-[#151B26] text-textMuted dark:text-[#8E98A8]">
+                            ауд. {lesson.classroom}
+                          </span>
+                        )}
+                      </div>
+                      <h4 className="font-semibold text-text dark:text-[#F1F5F9] text-sm mt-1 truncate group-hover:text-primary dark:group-hover:text-[#4E80EE] transition-colors">
+                        {lesson.title || lesson.discipline || 'Занятие'}
+                      </h4>
+                      <div className="flex items-center gap-3 mt-1 text-xs text-textMuted dark:text-[#8E98A8]">
+                        {lesson.type && <span>{lesson.type}</span>}
+                        {lesson.teacher && <span className="truncate">• {lesson.teacher}</span>}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
-      )}
-    </div>
+
+        {/* News Feed Preview */}
+        {news.length > 0 && (
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-textMuted dark:text-[#8E98A8] uppercase tracking-wider">
+                Новости университета
+              </h2>
+              <button
+                onClick={() => navigate('/news')}
+                className="text-xs font-semibold text-primary dark:text-[#4E80EE] hover:underline"
+              >
+                Все новости →
+              </button>
+            </div>
+            <div className="space-y-2.5">
+              {news.map((item, idx) => (
+                <div
+                  key={item.id || idx}
+                  onClick={() => navigate('/news')}
+                  className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 hover:bg-slate-50 dark:hover:bg-[#232D3F] transition-all cursor-pointer active:scale-[0.99]"
+                >
+                  <h4 className="font-semibold text-text dark:text-[#F1F5F9] text-sm line-clamp-1">
+                    {item.title || item.header}
+                  </h4>
+                  <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-1 line-clamp-2">
+                    {item.preview || item.content || item.description}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Modal for College Missed Lessons */}
+        {isCollege && showMissedModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-surface dark:bg-[#1C2433] rounded-2xl border border-border/60 dark:border-[#283245] w-full max-w-lg max-h-[80vh] flex flex-col shadow-2xl overflow-hidden">
+              <div className="p-4 border-b border-border/40 dark:border-[#283245] flex items-center justify-between bg-slate-50/50 dark:bg-[#151B26]/50">
+                <div className="flex items-center gap-2 text-accent">
+                  <Icons.AlertTriangle size={18} />
+                  <h3 className="font-bold text-text dark:text-[#F1F5F9]">
+                    Пропущенные занятия ({stats.missedLessons?.length || 0})
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setShowMissedModal(false)}
+                  className="p-1 rounded-lg hover:bg-slate-200 dark:hover:bg-[#283245] text-textMuted transition-colors"
+                >
+                  <Icons.X size={18} />
+                </button>
+              </div>
+
+              <div className="p-4 overflow-y-auto flex-1 space-y-2.5">
+                {(!stats.missedLessons || stats.missedLessons.length === 0) ? (
+                  <div className="text-center py-8">
+                    <Icons.CheckCircle2 className="w-10 h-10 text-secondary dark:text-emerald-400 mx-auto mb-2 opacity-80" />
+                    <p className="text-sm font-semibold text-text dark:text-[#F1F5F9]">Пропусков не обнаружено</p>
+                    <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-1">Отличная посещаемость в текущем семестре!</p>
+                  </div>
+                ) : (
+                  stats.missedLessons.map((item, idx) => (
+                    <div
+                      key={idx}
+                      className="p-3 bg-slate-50 dark:bg-[#151B26] rounded-xl border border-border/30 dark:border-[#283245]/40 flex flex-col gap-1 text-xs"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-text dark:text-[#F1F5F9] text-sm">
+                          {item.discipline}
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-accent/10 text-accent font-semibold text-[11px]">
+                          {item.date}
+                        </span>
+                      </div>
+                      {item.teacher && (
+                        <span className="text-textMuted dark:text-[#8E98A8]">
+                          Преподаватель: {item.teacher}
+                        </span>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="p-3 border-t border-border/40 dark:border-[#283245] bg-slate-50/50 dark:bg-[#151B26]/50 text-right">
+                <button
+                  onClick={() => setShowMissedModal(false)}
+                  className="px-4 py-2 bg-primary text-white text-xs font-semibold rounded-xl hover:bg-primary/90 transition-all"
+                >
+                  Понятно
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </PullToRefresh>
   );
 };

@@ -1,7 +1,9 @@
-export { apiClient } from './client';
-export { authService } from './authService';
-export { cacheService } from './cacheService';
-export { cryptoStorage } from './cryptoStorage';
+export { apiClient } from './client.js';
+export { authService } from './authService.js';
+export { cacheService } from './cacheService.js';
+export { cryptoStorage } from './cryptoStorage.js';
+export { parseCollegeProgress } from './parsers/collegeParser.js';
+export { parseBachelorProgress } from './parsers/bachelorParser.js';
 export {
   lkService,
   formatISODate,
@@ -13,4 +15,4 @@ export {
   isCollegeStudent,
   parseLessonDate,
   isPastDate
-} from './lkService';
+} from './lkService.js';

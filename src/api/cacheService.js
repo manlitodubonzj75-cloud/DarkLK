@@ -1,18 +1,18 @@
 /**
  * Offline & Fallback Cache Service for MSAL+ Web
  * Encrypted with AES-GCM 256 via cryptoStorage (152-FZ zero-knowledge client protection)
- * with zero-latency synchronous fast cache layer for instant cold boot rendering.
+ * with zero-latency memory vault for instant rendering.
  * Ensures full app functionality even when lk.msal.ru is down, slow, or unreachable.
  */
 
-import { cryptoStorage } from "./cryptoStorage";
+import { cryptoStorage } from "./cryptoStorage.js";
 
 const CACHE_PREFIX = "msal_cache_";
 const FAST_PREFIX = "_fast_msal_cache_";
 
 export const cacheService = {
   /**
-   * Save data to local encrypted cache and fast cold-boot slot with timestamp
+   * Save data to encrypted cache with timestamp
    */
   set(key, data) {
     if (!key || data === undefined) return;
@@ -21,35 +21,34 @@ export const cacheService = {
         data,
         timestamp: Date.now()
       };
+      // Memory vault is updated synchronously; encrypted ciphertext is saved to storage
       cryptoStorage.setItemFast(`${CACHE_PREFIX}${key}`, payload);
-
-      // Fast synchronous storage for immediate zero-latency reads on cold start
-      try {
-        localStorage.setItem(`${FAST_PREFIX}${key}`, JSON.stringify(payload));
-      } catch (_) {}
     } catch (e) {
       console.warn(`[Cache] Failed to write cache for key "${key}":`, e.message);
     }
   },
 
   /**
-   * Read data from local cache (synchronous, checks memory vault first, then fast storage)
+   * Read data from local cache (synchronous, memory vault)
    */
   get(key) {
     if (!key) return null;
     try {
-      // 1. Check in-memory decrypted vault
+      // 1. Check decrypted memory vault
       const payload = cryptoStorage.getItemSync(`${CACHE_PREFIX}${key}`);
       if (payload && payload.data !== undefined) {
         return payload.data;
       }
 
-      // 2. Fallback to fast synchronous storage slot (available immediately before crypto key derivation)
+      // 2. Fallback check for legacy unencrypted fast storage and auto-migrate
       const rawFast = localStorage.getItem(`${FAST_PREFIX}${key}`);
       if (rawFast) {
         try {
           const parsed = JSON.parse(rawFast);
           if (parsed && parsed.data !== undefined) {
+            // Remove unencrypted entry to protect user privacy
+            localStorage.removeItem(`${FAST_PREFIX}${key}`);
+            this.set(key, parsed.data);
             return parsed.data;
           }
         } catch (_) {}
@@ -77,19 +76,10 @@ export const cacheService = {
     if (!key) return null;
     try {
       const payload = cryptoStorage.getItemSync(`${CACHE_PREFIX}${key}`);
-      if (payload) {
+      if (payload && payload.timestamp) {
         return {
           timestamp: payload.timestamp,
-          ageMs: Date.now() - (payload.timestamp || 0),
-          isCached: true
-        };
-      }
-      const rawFast = localStorage.getItem(`${FAST_PREFIX}${key}`);
-      if (rawFast) {
-        const parsed = JSON.parse(rawFast);
-        return {
-          timestamp: parsed.timestamp,
-          ageMs: Date.now() - (parsed.timestamp || 0),
+          ageMs: Date.now() - payload.timestamp,
           isCached: true
         };
       }
@@ -125,11 +115,22 @@ export const cacheService = {
   },
 
   /**
-   * Wrap an async API fetch call with stale-while-revalidate & offline fallback.
+   * Wrap an async API fetch call with stale-while-revalidate, TTL & offline fallback.
    * If network fails (site down / HTTP 5xx / timeout), gracefully returns cached copy.
+   *
+   * @param {string} key Cache key
+   * @param {Function} fetcherFn Async fetcher function
+   * @param {Object} options Options: { ttl?: number, forceRefresh?: boolean }
    */
   async withOfflineFallback(key, fetcherFn, options = {}) {
     const cached = this.get(key);
+    const info = this.getInfo(key);
+    const ttl = options.ttl || null;
+
+    // Fast-path: if valid cache exists and is within TTL, return immediately without hitting network
+    if (!options.forceRefresh && ttl && cached !== null && info && info.ageMs < ttl) {
+      return cached;
+    }
 
     try {
       // Attempt fresh fetch from server

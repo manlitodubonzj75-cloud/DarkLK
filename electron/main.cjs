@@ -1,6 +1,8 @@
 const { app, BrowserWindow, session, shell } = require('electron');
 const path = require('path');
 
+app.setName('DarkMSAL');
+
 let mainWindow = null;
 
 function createWindow() {
@@ -10,6 +12,7 @@ function createWindow() {
     minWidth: 960,
     minHeight: 640,
     title: 'DarkMSAL',
+    icon: path.join(__dirname, 'icon.png'),
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#12151B',
     show: false,

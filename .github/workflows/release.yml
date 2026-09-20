@@ -110,13 +110,13 @@ jobs:
       - name: Prepare APK Artifact
         run: |
           mkdir -p release
-          cp android/app/build/outputs/apk/debug/app-debug.apk release/DarkMSAL-1.0.0.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk release/DarkMSAL-2.0.0.apk
 
       - name: Upload Android Artifact
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: release/DarkMSAL-1.0.0.apk
+          path: release/*.apk
 
   publish-release:
     name: Publish GitHub Release

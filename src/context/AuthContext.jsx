@@ -9,6 +9,18 @@ export const AuthProvider = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  const logout = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      await authService.logout();
+    } finally {
+      setUser(null);
+      setToken(null);
+      setError(null);
+      setIsLoading(false);
+    }
+  }, []);
+
   // Restore session on initial load
   useEffect(() => {
     let isMounted = true;
@@ -22,15 +34,28 @@ export const AuthProvider = ({ children }) => {
             setUser(session.user);
             setToken(session.token);
           } else {
-            setUser(null);
-            setToken(null);
+            // Only clear state if there is truly no cached user or credentials
+            const fallbackUser = authService.getCachedUser();
+            if (fallbackUser) {
+              setUser(fallbackUser);
+              setToken(cryptoStorage.getToken() || 'offline');
+            } else {
+              setUser(null);
+              setToken(null);
+            }
           }
         }
       } catch (err) {
-        console.warn('Initial session restore failed:', err);
+        console.warn('Initial session restore error caught:', err);
         if (isMounted) {
-          setUser(null);
-          setToken(null);
+          const fallbackUser = authService.getCachedUser();
+          if (fallbackUser) {
+            setUser(fallbackUser);
+            setToken(cryptoStorage.getToken() || 'offline');
+          } else {
+            setUser(null);
+            setToken(null);
+          }
         }
       } finally {
         if (isMounted) {
@@ -41,10 +66,26 @@ export const AuthProvider = ({ children }) => {
 
     initAuth();
 
+    // Listen to background token renewals and authoritative session expirations
+    const handleTokenRefreshed = (e) => {
+      if (e.detail) {
+        setToken(e.detail);
+      }
+    };
+
+    const handleSessionExpired = () => {
+      logout();
+    };
+
+    window.addEventListener('session-token-refreshed', handleTokenRefreshed);
+    window.addEventListener('auth-session-expired', handleSessionExpired);
+
     return () => {
       isMounted = false;
+      window.removeEventListener('session-token-refreshed', handleTokenRefreshed);
+      window.removeEventListener('auth-session-expired', handleSessionExpired);
     };
-  }, []);
+  }, [logout]);
 
   const login = useCallback(async (username, password) => {
     setIsLoading(true);
@@ -53,7 +94,6 @@ export const AuthProvider = ({ children }) => {
       const response = await authService.login(username, password);
       if (response && response.access_token) {
         setToken(response.access_token);
-        // If user object was returned or fetched
         const currentUser = response.user || authService.getCachedUser() || {
           name: username,
           username,
@@ -70,18 +110,6 @@ export const AuthProvider = ({ children }) => {
       setError(msg);
       return { success: false, error: msg };
     } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  const logout = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      await authService.logout();
-    } finally {
-      setUser(null);
-      setToken(null);
-      setError(null);
       setIsLoading(false);
     }
   }, []);

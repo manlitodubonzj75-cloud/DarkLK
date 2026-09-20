@@ -261,7 +261,7 @@ export const SettingsPage = () => {
               <p className="text-xs text-textMuted dark:text-[#8E98A8]">для Альма Матер с любовью.</p>
               <div className="flex items-center space-x-2 mt-1">
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-bg dark:bg-[#12151B] border border-border dark:border-[#2B3242] text-textMuted dark:text-[#8E98A8]">
-                  Версия 1.0
+                  Версия 2.0.0
                 </span>
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                   AES-256 (152-ФЗ)

@@ -1,9 +1,10 @@
-import { apiClient } from './client';
-import { cryptoStorage } from './cryptoStorage';
+import { apiClient, tryRefreshToken } from './client.js';
+import { cryptoStorage } from './cryptoStorage.js';
 
 export const authService = {
   /**
    * User login: POST /auth
+   * Stores access tokens and securely saves encrypted credentials in AES-GCM vault
    */
   async login(username, password) {
     const data = await apiClient('/auth', {
@@ -13,8 +14,7 @@ export const authService = {
 
     if (data && data.access_token) {
       cryptoStorage.setTokens(data.access_token, data.refresh_token || null);
-      localStorage.setItem('saved_login', username);
-      cryptoStorage.setItem('saved_password', password);
+      cryptoStorage.setSavedCredentials(username, password);
 
       // Cache user from POST /auth response right away (contains full profile for College & Bachelor)
       this.cacheUser(data);
@@ -62,7 +62,7 @@ export const authService = {
 
   /**
    * User logout: POST /auth/logout
-   * Completely shreds cryptographic keys and purges local storage
+   * Completely shreds cryptographic keys, purges local storage and IndexedDB
    */
   async logout() {
     try {
@@ -70,7 +70,6 @@ export const authService = {
     } catch (e) {
       console.warn('Logout request warning:', e.message);
     } finally {
-      localStorage.removeItem('saved_login');
       await cryptoStorage.purgeAll();
     }
   },
@@ -90,48 +89,67 @@ export const authService = {
   },
 
   /**
-   * Restore user session on startup
+   * Restore user session on startup.
+   * Resilient to network outages, university server restarts, and token expiry.
+   * NEVER logs the student out unless university server explicitly rejects credentials with 401.
    */
   async restoreSession() {
     await cryptoStorage.init();
 
     const token = cryptoStorage.getToken() || localStorage.getItem('access_token');
-    const refreshToken = cryptoStorage.getRefreshToken() || localStorage.getItem('refresh_token');
+    const { login: savedLogin, password: savedPassword } = cryptoStorage.getSavedCredentials();
+    const offlineUser = this.getCachedUser();
 
-    if (!token && !refreshToken) {
+    // If there is no token and no saved credentials, user is not authenticated
+    if (!token && !savedLogin) {
       return null;
     }
 
+    // 1. If we have a token, attempt to validate with current session
     if (token) {
       try {
         const user = await this.checkSession(token);
         if (user) {
-          this.cacheUser(user);
-          return { user, token };
+          const merged = { ...(offlineUser || {}), ...user };
+          this.cacheUser(merged);
+          return { user: merged, token };
         }
-      } catch (e) {
-        console.warn('Existing access_token invalid, attempting refresh...');
-      }
-    }
-
-    if (refreshToken) {
-      try {
-        const refreshed = await this.refreshToken(refreshToken);
-        if (refreshed && refreshed.access_token) {
-          const user = await this.checkSession(refreshed.access_token);
-          if (user) {
-            this.cacheUser(user);
-            return { user, token: refreshed.access_token };
+      } catch (err) {
+        // If error is NOT 401 (e.g. server is down, 502/504, timeout, or user is offline):
+        // Keep the user in the app with cached profile!
+        if (err.status !== 401 && err.message !== 'UNAUTHORIZED') {
+          console.warn('[AuthService] Server unreachable during session restore, using cached offline session:', err.message);
+          if (offlineUser) {
+            return { user: offlineUser, token, isOffline: true };
           }
         }
-      } catch (e) {
-        console.warn('Token refresh on session restore failed:', e);
+        console.warn('[AuthService] Token expired (401), attempting background re-authentication...');
       }
     }
 
-    const offlineUser = this.getCachedUser();
-    if (offlineUser && token) {
-      return { user: offlineUser, token };
+    // 2. Token expired or missing: attempt silent background re-login from encrypted vault
+    if (savedLogin && savedPassword) {
+      try {
+        const refreshed = await tryRefreshToken();
+        if (refreshed) {
+          const newToken = cryptoStorage.getToken();
+          const user = await this.checkSession(newToken).catch(() => offlineUser);
+          const finalUser = user || offlineUser || { username: savedLogin, name: savedLogin };
+          this.cacheUser(finalUser);
+          return { user: finalUser, token: newToken };
+        }
+      } catch (err) {
+        // Network failure during re-login must NOT log out an existing user
+        if (err.status !== 401 && err.status !== 403 && offlineUser) {
+          console.warn('[AuthService] Network error during re-login, falling back to offline session');
+          return { user: offlineUser, token: token || 'offline', isOffline: true };
+        }
+      }
+    }
+
+    // 3. Fallback: keep user logged in with offline profile if available
+    if (offlineUser) {
+      return { user: offlineUser, token: token || 'offline', isOffline: true };
     }
 
     return null;

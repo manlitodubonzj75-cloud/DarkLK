@@ -71,112 +71,109 @@ function openKeyDatabase() {
 }
 
 /**
- * Retrieve or generate the non-extractable master AES-GCM 256 key
+ * Retrieve existing AES-GCM CryptoKey from IndexedDB or generate a new non-extractable 256-bit key
  */
 async function getOrGenerateMasterKey() {
   if (masterCryptoKey) return masterCryptoKey;
 
-  try {
-    const db = await openKeyDatabase();
-    const tx = db.transaction(STORE_NAME, 'readwrite');
+  const db = await openKeyDatabase();
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
     const store = tx.objectStore(STORE_NAME);
+    const getReq = store.get(MASTER_KEY_ID);
 
-    const existingRecord = await new Promise((resolve, reject) => {
-      const getReq = store.get(MASTER_KEY_ID);
-      getReq.onsuccess = () => resolve(getReq.result);
-      getReq.onerror = () => reject(getReq.error);
-    });
+    getReq.onsuccess = async () => {
+      if (getReq.result && getReq.result.key) {
+        masterCryptoKey = getReq.result.key;
+        return resolve(masterCryptoKey);
+      }
 
-    if (existingRecord && existingRecord.key) {
-      masterCryptoKey = existingRecord.key;
-      return masterCryptoKey;
-    }
+      // Generate a new 256-bit AES-GCM non-extractable key
+      try {
+        const newKey = await window.crypto.subtle.generateKey(
+          {
+            name: 'AES-GCM',
+            length: 256
+          },
+          false, // extractable: false (hardware / crypto-subsystem isolated)
+          ['encrypt', 'decrypt']
+        );
 
-    // Generate non-extractable 256-bit AES-GCM key
-    // extractable: false guarantees key raw bytes can NEVER be inspected or stolen via XSS
-    const newKey = await window.crypto.subtle.generateKey(
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['encrypt', 'decrypt']
-    );
+        const writeTx = db.transaction(STORE_NAME, 'readwrite');
+        const writeStore = writeTx.objectStore(STORE_NAME);
+        const putReq = writeStore.put({ id: MASTER_KEY_ID, key: newKey });
 
-    await new Promise((resolve, reject) => {
-      const putReq = store.put({
-        id: MASTER_KEY_ID,
-        key: newKey,
-        createdAt: Date.now()
-      });
-      putReq.onsuccess = () => resolve();
-      putReq.onerror = () => reject(putReq.error);
-    });
+        putReq.onsuccess = () => {
+          masterCryptoKey = newKey;
+          resolve(masterCryptoKey);
+        };
+        putReq.onerror = () => reject(putReq.error || new Error('Failed to store generated master key'));
+      } catch (err) {
+        reject(err);
+      }
+    };
 
-    masterCryptoKey = newKey;
-    return masterCryptoKey;
-  } catch (err) {
-    console.warn('[SecureVault] IndexedDB unavailable, using ephemeral in-memory key:', err.message);
-    if (!masterCryptoKey) {
-      masterCryptoKey = await window.crypto.subtle.generateKey(
-        { name: 'AES-GCM', length: 256 },
-        false,
-        ['encrypt', 'decrypt']
-      );
-    }
-    return masterCryptoKey;
-  }
+    getReq.onerror = () => reject(getReq.error || new Error('Failed to lookup master key'));
+  });
 }
 
 /**
- * Encrypt a JavaScript value using AES-GCM
+ * Encrypt arbitrary JSON data with AES-GCM 256 using 96-bit random IV
  */
-async function encryptValue(key, value) {
-  if (value === undefined || value === null) return null;
+async function encryptValue(cryptoKey, value) {
+  if (value === null || value === undefined) return null;
 
   const jsonStr = JSON.stringify(value);
-  const encodedData = new TextEncoder().encode(jsonStr);
-  const iv = window.crypto.getRandomValues(new Uint8Array(12)); // 96-bit random IV
+  const encoded = new TextEncoder().encode(jsonStr);
 
-  const ciphertext = await window.crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    encodedData
+  // 96-bit unique IV per operation as required by NIST SP 800-38D
+  const iv = window.crypto.getRandomValues(new Uint8Array(12));
+
+  const cipherBuffer = await window.crypto.subtle.encrypt(
+    {
+      name: 'AES-GCM',
+      iv
+    },
+    cryptoKey,
+    encoded
   );
 
-  // Combine IV (12 bytes) + Ciphertext
-  const combined = new Uint8Array(iv.length + ciphertext.byteLength);
-  combined.set(iv, 0);
-  combined.set(new Uint8Array(ciphertext), iv.length);
+  const ivBase64 = arrayBufferToBase64(iv.buffer);
+  const cipherBase64 = arrayBufferToBase64(cipherBuffer);
 
-  return ENC_PREFIX + arrayBufferToBase64(combined.buffer);
+  return `${ENC_PREFIX}${ivBase64}:${cipherBase64}`;
 }
 
 /**
- * Decrypt an AES-GCM encrypted string
+ * Decrypt ciphertext string with AES-GCM 256
  */
-async function decryptValue(key, rawString) {
-  if (!rawString || typeof rawString !== 'string') return null;
+async function decryptValue(cryptoKey, cipherText) {
+  if (!cipherText || typeof cipherText !== 'string') return null;
 
-  // If not encrypted (legacy item), parse and return
-  if (!rawString.startsWith(ENC_PREFIX)) {
+  // Transparently return unencrypted legacy values if any
+  if (!cipherText.startsWith(ENC_PREFIX)) {
     try {
-      return JSON.parse(rawString);
+      return JSON.parse(cipherText);
     } catch (_) {
-      return rawString;
+      return cipherText;
     }
   }
 
-  const base64Data = rawString.slice(ENC_PREFIX.length);
-  const combinedBuf = base64ToArrayBuffer(base64Data);
-  const combined = new Uint8Array(combinedBuf);
+  const payload = cipherText.slice(ENC_PREFIX.length);
+  const [ivBase64, cipherBase64] = payload.split(':');
+  if (!ivBase64 || !cipherBase64) return null;
 
-  if (combined.length < 13) return null;
-
-  const iv = combined.slice(0, 12);
-  const ciphertext = combined.slice(12);
+  const iv = base64ToArrayBuffer(ivBase64);
+  const cipher = base64ToArrayBuffer(cipherBase64);
 
   const decrypted = await window.crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    ciphertext
+    {
+      name: 'AES-GCM',
+      iv: new Uint8Array(iv)
+    },
+    cryptoKey,
+    cipher
   );
 
   const jsonStr = new TextDecoder().decode(decrypted);
@@ -195,10 +192,10 @@ export const cryptoStorage = {
       try {
         const key = await getOrGenerateMasterKey();
 
-        // Preload core security keys into memory vault
-        const coreKeys = ['access_token', 'refresh_token', 'cached_user'];
+        // Preload core security keys and credentials into memory vault
+        const coreKeys = ['access_token', 'refresh_token', 'cached_user', 'saved_login', 'saved_password'];
 
-        // Also detect cached data items starting with msal_cache_
+        // Detect all keys starting with msal_cache_ or matching coreKeys
         const allKeys = Object.keys(localStorage);
         for (const k of allKeys) {
           if (k && (k.startsWith('msal_cache_') || coreKeys.includes(k))) {
@@ -334,6 +331,12 @@ export const cryptoStorage = {
     return this.getItemSync('cached_user');
   },
 
+  getSavedCredentials() {
+    const login = this.getItemSync('saved_login') || localStorage.getItem('saved_login');
+    const password = this.getItemSync('saved_password');
+    return { login, password };
+  },
+
   setTokens(accessToken, refreshToken) {
     if (accessToken) this.setItemFast('access_token', accessToken);
     if (refreshToken) this.setItemFast('refresh_token', refreshToken);
@@ -343,6 +346,14 @@ export const cryptoStorage = {
     if (userData) this.setItemFast('cached_user', userData);
   },
 
+  setSavedCredentials(login, password) {
+    if (login) this.setItemFast('saved_login', login);
+    if (password) this.setItemFast('saved_password', password);
+    try {
+      localStorage.removeItem('saved_login');
+    } catch (_) {}
+  },
+
   /**
    * Cryptographic shredding & complete data purge upon logout
    * Deletes in-memory keys, clears localStorage, and rotates/wipes the IndexedDB key
@@ -350,17 +361,19 @@ export const cryptoStorage = {
   async purgeAll() {
     memoryVault.clear();
 
-    // Remove all cached items and tokens from localStorage
+    const coreKeys = ['access_token', 'refresh_token', 'cached_user', 'saved_login', 'saved_password'];
+
+    // Remove all cached items, credentials and tokens from localStorage
     const keysToRemove = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && (k.startsWith('msal_cache_') || k === 'access_token' || k === 'refresh_token' || k === 'cached_user')) {
+      if (k && (k.startsWith('msal_cache_') || k.startsWith('_fast_msal_cache_') || coreKeys.includes(k))) {
         keysToRemove.push(k);
       }
     }
     keysToRemove.forEach(k => localStorage.removeItem(k));
 
-    // Clear key in IndexedDB so any residual ciphertext is unrecoverable
+    // Clear key in IndexedDB so any residual ciphertext is permanently unrecoverable
     try {
       const db = await openKeyDatabase();
       const tx = db.transaction(STORE_NAME, 'readwrite');
