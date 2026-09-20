@@ -73,7 +73,6 @@
       ],
       "category": "Education",
       "icon": "build/icons",
-      "desktopName": "darkmsal.desktop",
       "maintainer": "DarkMSAL Team <dev@msal.ru>"
     }
   },
