@@ -103,13 +103,13 @@ jobs:
       - name: Prepare APK Artifact
         run: |
           mkdir -p release
-          cp android/app/build/outputs/apk/debug/app-debug.apk release/DarkMSAL-1.1.0.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk release/DarkMSAL-1.0.0.apk
 
       - name: Upload Android Artifact
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: release/DarkMSAL-1.1.0.apk
+          path: release/DarkMSAL-1.0.0.apk
 
   publish-release:
     name: Publish GitHub Release
@@ -134,8 +134,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         with:
-          tag_name: ${{ github.ref_name || 'v1.1.0' }}
-          name: DarkMSAL ${{ github.ref_name || 'v1.1.0' }}
+          tag_name: ${{ github.ref_name || 'v1.0.0' }}
+          name: DarkMSAL ${{ github.ref_name || 'v1.0.0' }}
           draft: false
           prerelease: false
           generate_release_notes: true

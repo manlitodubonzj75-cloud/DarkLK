@@ -555,11 +555,26 @@ export const lkService = {
     return apiClient(`/news/${newsId}/read`, { method: 'POST' });
   },
 
+  async getPrivacySettings() {
+    return cacheService.withOfflineFallback('student_privacy', async () => {
+      try {
+        const res = await apiClient('/student/access');
+        return res;
+      } catch (e) {
+        // Some backends return access directly via /student or /auth profile
+        return null;
+      }
+    });
+  },
+
   async updatePrivacySettings(settings) {
-    return apiClient('/student/access', {
+    const res = await apiClient('/student/access', {
       method: 'PUT',
       body: JSON.stringify(settings)
     });
+    // Update local cache
+    cacheService.set('student_privacy', settings);
+    return res;
   },
 
   /**

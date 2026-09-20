@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -8,28 +8,96 @@ import { Logo } from '../../components/common/Logo';
 import { LegalModal } from '../../components/common/LegalModal';
 import { Icons } from '../../components/common/Icons';
 
+
+function parsePrivacyBool(val, fallback = false) {
+  if (val === undefined || val === null) return fallback;
+  if (typeof val === "boolean") return val;
+  if (typeof val === "number") return val === 1;
+  if (typeof val === "string") {
+    const s = val.trim().toLowerCase();
+    if (s === "true" || s === "1" || s === "yes") return true;
+    if (s === "false" || s === "0" || s === "no") return false;
+  }
+  return fallback;
+}
+
+function resolveUserPrivacy(user, serverData = null) {
+  const src = serverData || user?.access || user?.privacy || user || {};
+
+  // Email
+  let showEmail = false;
+  if (src.showEmail !== undefined) showEmail = parsePrivacyBool(src.showEmail);
+  else if (src.email !== undefined) showEmail = parsePrivacyBool(src.email);
+  else if (user?.showEmail !== undefined) showEmail = parsePrivacyBool(user.showEmail);
+  else if (user?.emailVisible !== undefined) showEmail = parsePrivacyBool(user.emailVisible);
+
+  // Photo
+  let showPhoto = false;
+  if (src.showPhoto !== undefined) showPhoto = parsePrivacyBool(src.showPhoto);
+  else if (src.photo !== undefined) showPhoto = parsePrivacyBool(src.photo);
+  else if (user?.showPhoto !== undefined) showPhoto = parsePrivacyBool(user.showPhoto);
+  else if (user?.photoVisible !== undefined) showPhoto = parsePrivacyBool(user.photoVisible);
+
+  // Mobile / Phone
+  let showMobile = false;
+  if (src.showMobile !== undefined) showMobile = parsePrivacyBool(src.showMobile);
+  else if (src.mobile !== undefined) showMobile = parsePrivacyBool(src.mobile);
+  else if (src.phone !== undefined) showMobile = parsePrivacyBool(src.phone);
+  else if (user?.showMobile !== undefined) showMobile = parsePrivacyBool(user.showMobile);
+  else if (user?.mobileVisible !== undefined) showMobile = parsePrivacyBool(user.mobileVisible);
+
+  return { showEmail, showPhoto, showMobile };
+}
+
 export const SettingsPage = () => {
   const { user, logout } = useAuth();
   const { isDark, toggleTheme } = useTheme();
   const navigate = useNavigate();
 
-  const [privacy, setPrivacy] = useState({
-    showEmail: user?.showEmail ?? true,
-    showPhoto: user?.showPhoto ?? true,
-    showMobile: user?.showMobile ?? true
-  });
+  const [privacy, setPrivacy] = useState(() => resolveUserPrivacy(user));
   const [savingPrivacy, setSavingPrivacy] = useState(false);
   const [legalModalTab, setLegalModalTab] = useState(null);
+
+  // Synchronize privacy settings from server /student/access or updated user profile
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadRemotePrivacy() {
+      try {
+        const remoteAccess = await lkService.getPrivacySettings();
+        if (remoteAccess && isMounted) {
+          setPrivacy(resolveUserPrivacy(user, remoteAccess));
+          return;
+        }
+      } catch (e) {
+        console.warn('Could not fetch /student/access directly:', e);
+      }
+
+      if (user && isMounted) {
+        setPrivacy(resolveUserPrivacy(user));
+      }
+    }
+
+    loadRemotePrivacy();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user]);
 
   const handleTogglePrivacy = async (key) => {
     const updated = { ...privacy, [key]: !privacy[key] };
     setPrivacy(updated);
     setSavingPrivacy(true);
     try {
+      // Send both field formats for 100% backend parity
       await lkService.updatePrivacySettings({
         email: updated.showEmail,
         photo: updated.showPhoto,
-        mobile: updated.showMobile
+        mobile: updated.showMobile,
+        showEmail: updated.showEmail,
+        showPhoto: updated.showPhoto,
+        showMobile: updated.showMobile
       });
     } catch (e) {
       console.warn('Failed to update privacy on server:', e);
@@ -193,7 +261,7 @@ export const SettingsPage = () => {
               <p className="text-xs text-textMuted dark:text-[#8E98A8]">для Альма Матер с любовью.</p>
               <div className="flex items-center space-x-2 mt-1">
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-bg dark:bg-[#12151B] border border-border dark:border-[#2B3242] text-textMuted dark:text-[#8E98A8]">
-                  Версия 1.1 (build 2)
+                  Версия 1.0
                 </span>
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                   AES-256 (152-ФЗ)

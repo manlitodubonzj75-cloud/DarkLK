@@ -118,7 +118,7 @@ export const AppShell = () => {
               Конфиденциальность
             </button>
           </div>
-          <span className="font-mono">v1.1</span>
+          <span className="font-mono">v1.0</span>
         </div>
 
         {/* Sidebar Footer Controls */}
