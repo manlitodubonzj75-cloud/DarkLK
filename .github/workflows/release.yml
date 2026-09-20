@@ -19,13 +19,10 @@ jobs:
         include:
           - os: ubuntu-latest
             target: --linux AppImage rpm deb
-            artifact_pattern: release/*.{AppImage,rpm,deb}
           - os: macos-latest
             target: --mac dmg
-            artifact_pattern: release/*.dmg
           - os: windows-latest
             target: --win nsis
-            artifact_pattern: release/*.exe
 
     steps:
       - name: Checkout repository
@@ -49,16 +46,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y rpm libarchive-tools
 
-      - name: Build Desktop Application
-        run: npx electron-builder ${{ matrix.target }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build Desktop Application (Local Only)
+        run: npx electron-builder ${{ matrix.target }} --publish never
 
       - name: Upload Desktop Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.os }}
-          path: release/*.*
+          path: |
+            release/*.AppImage
+            release/*.rpm
+            release/*.deb
+            release/*.dmg
+            release/*.exe
           if-no-files-found: ignore
 
   build-android:
@@ -80,8 +80,10 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Setup Android SDK Build-Tools 35
+        run: |
+          yes | sdkmanager --licenses || true
+          sdkmanager "build-tools;35.0.0" "platforms;android-34"
 
       - name: Install dependencies
         run: npm ci
