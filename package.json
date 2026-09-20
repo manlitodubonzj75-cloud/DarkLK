@@ -12,7 +12,7 @@
     "package:mac": "vite build && electron-builder --mac dmg",
     "package:apk": "vite build && npx cap sync android && cd android && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=/opt/homebrew/share/android-commandlinetools ./gradlew assembleDebug && cp app/build/outputs/apk/debug/app-debug.apk ../release/DarkMSAL-1.1.apk",
     "package:win": "vite build && electron-builder --win",
-    "package:linux": "vite build && electron-builder --linux AppImage rpm"
+    "package:linux": "vite build && electron-builder --linux AppImage rpm deb"
   },
   "build": {
     "appId": "ru.msal.darkmsal",
@@ -68,10 +68,12 @@
     "linux": {
       "target": [
         "AppImage",
-        "rpm"
+        "rpm",
+        "deb"
       ],
       "category": "Education",
-      "icon": "build/icon.png"
+      "icon": "build/icon.png",
+      "maintainer": "DarkMSAL Team <dev@msal.ru>"
     }
   },
   "dependencies": {
@@ -93,5 +95,9 @@
     "postcss": "^8.4.32",
     "tailwindcss": "^3.4.0",
     "vite": "^5.0.0"
+  },
+  "author": {
+    "name": "DarkMSAL Team",
+    "email": "dev@msal.ru"
   }
 }

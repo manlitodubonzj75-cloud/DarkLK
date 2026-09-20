@@ -44,13 +44,13 @@ export const SettingsPage = () => {
   };
 
   const getInitials = (name = '') => {
-    if (!name) return '??';
+    if (!name || typeof name !== 'string') return '??';
     const parts = name.trim().split(/\s+/);
     if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
     return name.slice(0, 2).toUpperCase();
   };
 
-  const photoUrl = user?.photo
+  const photoUrl = (typeof user?.photo === 'string' && user.photo.trim())
     ? (user.photo.startsWith('http') ? user.photo : `https://lk.msal.ru:3443/${user.photo}`)
     : null;
 

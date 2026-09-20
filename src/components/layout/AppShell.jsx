@@ -8,15 +8,14 @@ import { LegalModal } from '../common/LegalModal';
 import { useDeviceAdaptive } from "../../hooks/useDeviceAdaptive";
 import { PullToRefresh } from "../common/PullToRefresh";
 
-
 export const AppShell = () => {
-  const { user, logout } = useAuth();
+  const { user, logout, isCollege } = useAuth();
   const { isDark, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const [legalModalTab, setLegalModalTab] = React.useState(null);
   const device = useDeviceAdaptive();
 
-  const NAV_ITEMS = [
+  const ALL_NAV_ITEMS = [
     { to: '/', label: 'Главная', icon: Icons.Home },
     { to: '/schedule', label: 'Расписание', icon: Icons.Calendar },
     { to: '/grades', label: 'Оценки', icon: Icons.GraduationCap },
@@ -24,14 +23,20 @@ export const AppShell = () => {
     { to: '/consultations', label: 'Отработки', icon: Icons.UserCheck },
   ];
 
+  const NAV_ITEMS = isCollege
+    ? ALL_NAV_ITEMS.filter(item => item.to !== '/consultations')
+    : ALL_NAV_ITEMS;
+
   const getInitials = (name = '') => {
-    if (!name) return '??';
+    if (!name || typeof name !== 'string') return '??';
     const parts = name.trim().split(/\s+/);
-    if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+    if (parts.length >= 2 && parts[0] && parts[1]) {
+      return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+    }
     return name.slice(0, 2).toUpperCase();
   };
 
-  const photoUrl = user?.photo
+  const photoUrl = (typeof user?.photo === 'string' && user.photo.trim())
     ? (user.photo.startsWith('http') ? user.photo : `https://lk.msal.ru:3443/${user.photo}`)
     : null;
 
@@ -98,50 +103,48 @@ export const AppShell = () => {
 
         {/* Legal & version sub-bar */}
         <div className="px-4 py-2 border-t border-white/5 dark:border-[#1E2330] flex items-center justify-between text-[10px] text-white/50 dark:text-[#8E98A8]">
-          <button onClick={() => setLegalModalTab('terms')} className="hover:underline hover:text-white transition-colors">
-            Условия
-          </button>
-          <span>•</span>
-          <button onClick={() => setLegalModalTab('privacy')} className="hover:underline hover:text-white transition-colors">
-            Конфиденциальность
-          </button>
-          <span>•</span>
-          <span className="font-mono opacity-80">v1.1</span>
-        </div>
-
-        {/* Bottom controls */}
-        <div className="p-4 border-t border-white/10 dark:border-[#212634] flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <button
-              onClick={() => navigate('/settings')}
-              className="w-9 h-9 rounded-xl bg-white/10 dark:bg-[#22869A] hover:bg-white/20 dark:hover:bg-[#1E6685] flex items-center justify-center text-white transition-colors"
-              title="Настройки приложения"
+              onClick={() => setLegalModalTab('terms')}
+              className="hover:underline hover:text-white/80"
             >
-              <Icons.Settings size={18} />
+              Условия
             </button>
+            <span>•</span>
             <button
-              onClick={toggleTheme}
-              className="w-9 h-9 rounded-xl bg-white/10 dark:bg-[#1F2430] hover:bg-white/20 dark:hover:bg-[#262D3D] flex items-center justify-center text-white dark:text-[#8E98A8] dark:hover:text-white transition-colors"
-              title={isDark ? 'Включить светлую тему' : 'Включить тёмную тему'}
+              onClick={() => setLegalModalTab('privacy')}
+              className="hover:underline hover:text-white/80"
             >
-              {isDark ? <Icons.Sun size={18} /> : <Icons.Moon size={18} />}
+              Конфиденциальность
             </button>
           </div>
+          <span className="font-mono">v1.1</span>
+        </div>
+
+        {/* Sidebar Footer Controls */}
+        <div className="p-4 border-t border-white/10 dark:border-[#212634] flex items-center justify-between">
+          <button
+            onClick={toggleTheme}
+            className="flex items-center space-x-2 text-xs font-semibold text-white/80 dark:text-[#8E98A8] hover:text-white transition-colors"
+          >
+            {isDark ? <Icons.Sun size={18} /> : <Icons.Moon size={18} />}
+            <span>{isDark ? 'Светлая' : 'Тёмная'}</span>
+          </button>
 
           <button
             onClick={() => {
               logout();
               navigate('/login');
             }}
-            className="flex items-center space-x-2 text-xs font-semibold text-rose-300 dark:text-[#8E98A8] hover:text-rose-400 dark:hover:text-rose-400 px-3 py-2 rounded-xl hover:bg-white/10 dark:hover:bg-[#1F2430] transition-colors"
+            className="p-2 rounded-xl text-white/70 hover:text-rose-400 hover:bg-white/10 transition-colors"
+            title="Выйти из аккаунта"
           >
-            <Icons.LogOut size={16} />
-            <span>Выйти</span>
+            <Icons.LogOut size={18} />
           </button>
         </div>
       </aside>
 
-      {/* MAIN VIEWPORT */}
+      {/* MAIN VIEW AREA */}
       <div className="flex-1 flex flex-col h-full overflow-hidden">
         {/* Mobile Header Bar */}
         <header className="md:hidden flex items-center justify-between px-4 py-3 bg-card dark:bg-[#1F2430] border-b border-border dark:border-[#212634] z-10 shrink-0 pt-[max(0.75rem,env(safe-area-inset-top))]">

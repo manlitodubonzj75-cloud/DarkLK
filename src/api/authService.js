@@ -16,16 +16,22 @@ export const authService = {
       localStorage.setItem('saved_login', username);
       cryptoStorage.setItem('saved_password', password);
 
+      // Cache user from POST /auth response right away (contains full profile for College & Bachelor)
+      this.cacheUser(data);
+
       // Verify and fetch complete user profile
       try {
         const userProfile = await this.checkSession(data.access_token);
         if (userProfile) {
-          this.cacheUser(userProfile);
-          return { ...data, user: userProfile };
+          const merged = { ...data, ...userProfile };
+          this.cacheUser(merged);
+          return { ...data, user: merged };
         }
       } catch (e) {
         console.warn('Fetched token but checkSession failed, using token response data:', e);
       }
+
+      return { ...data, user: data };
     }
 
     return data;

@@ -32,7 +32,7 @@ const ProtectedRoute = ({ children }) => {
 };
 
 export const AppRouter = () => {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, isCollege } = useAuth();
 
   return (
     <Routes>
@@ -57,7 +57,10 @@ export const AppRouter = () => {
         <Route path="schedule" element={<SchedulePage />} />
         <Route path="grades" element={<GradesPage />} />
         <Route path="recordbook" element={<RecordbookPage />} />
-        <Route path="consultations" element={<ConsultationsPage />} />
+        <Route
+          path="consultations"
+          element={isCollege ? <Navigate to="/" replace /> : <ConsultationsPage />}
+        />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>

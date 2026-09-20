@@ -53,12 +53,30 @@ android/lint/outputs/
 android/lint/tmp/
 android/lint/reports/
 
+# SSH Keys & Personal Security - CRITICAL PROTECTION
+.ssh/
+id_rsa*
+id_ed25519*
+id_ecdsa*
+id_dsa*
+*.pem
+*.pub
+*.key
+known_hosts*
+authorized_keys*
+
+# HAR Network captures & Session dumps
+*.har
+*.pcap
+*.pcapng
+*.dump
+auth_dump*
+
 # Keystores & Credentials
 *.keystore
 *.jks
 *.p8
 *.p12
-*.key
 *.mobileprovision
 
 # Environment Variables & Local Config
@@ -95,3 +113,8 @@ __MACOSX/
 *.bak
 *.orig
 *~
+
+# Agent & CLI caches
+.agents/
+.gemini/
+.claude/

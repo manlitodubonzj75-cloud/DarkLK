@@ -63,6 +63,14 @@ export const cacheService = {
   },
 
   /**
+   * Check if a key exists in cache
+   */
+  has(key) {
+    if (!key) return false;
+    return this.get(key) !== null;
+  },
+
+  /**
    * Read cache metadata (timestamp, age)
    */
   getInfo(key) {

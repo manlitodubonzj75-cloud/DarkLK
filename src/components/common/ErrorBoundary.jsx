@@ -3,7 +3,7 @@ import React from 'react';
 export class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false, error: null, errorInfo: null };
   }
 
   static getDerivedStateFromError(error) {
@@ -12,15 +12,22 @@ export class ErrorBoundary extends React.Component {
 
   componentDidCatch(error, errorInfo) {
     console.error('ErrorBoundary caught an error:', error, errorInfo);
+    this.setState({ error, errorInfo });
   }
 
   handleReset = () => {
-    localStorage.removeItem('cached_user');
+    try {
+      localStorage.clear();
+      sessionStorage.clear();
+    } catch (_) {}
     window.location.reload();
   };
 
   render() {
     if (this.state.hasError) {
+      const errorMsg = this.state.error?.message || this.state.error?.toString?.() || 'Неизвестная ошибка';
+      const stack = this.state.error?.stack || this.state.errorInfo?.componentStack;
+
       return (
         <div className="min-h-screen flex items-center justify-center p-6 bg-[#12151B] text-white">
           <div className="max-w-md w-full bg-[#1F2430] border border-[#2B3242] rounded-2xl p-6 text-center shadow-xl">
@@ -32,9 +39,25 @@ export class ErrorBoundary extends React.Component {
               </svg>
             </div>
             <h2 className="text-xl font-bold mb-2">Что-то пошло не так</h2>
-            <p className="text-sm text-[#8E98A8] mb-6">
-              Произошла ошибка при отрисовке интерфейса. Нажмите кнопку ниже для перезагрузки приложения.
+            <p className="text-sm text-[#8E98A8] mb-4">
+              Произошла ошибка при отрисовке интерфейса.
             </p>
+
+            {/* Error Message Details */}
+            <div className="mb-6 p-3 bg-[#12151B] border border-rose-500/30 rounded-xl text-left">
+              <p className="text-xs font-mono text-rose-400 break-words leading-relaxed font-semibold">
+                {errorMsg}
+              </p>
+              {stack && (
+                <details className="mt-2 text-[10px] text-[#8E98A8]">
+                  <summary className="cursor-pointer hover:underline">Подробности стека</summary>
+                  <pre className="mt-2 p-2 bg-black/40 rounded overflow-x-auto whitespace-pre-wrap font-mono max-h-40 overflow-y-auto text-[10px]">
+                    {stack}
+                  </pre>
+                </details>
+              )}
+            </div>
+
             <div className="space-y-3">
               <button
                 onClick={() => window.location.reload()}

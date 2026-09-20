@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { authService, cryptoStorage } from '../api';
+import { authService, cryptoStorage, isCollegeStudent } from '../api';
 
 const AuthContext = createContext(null);
 
@@ -98,9 +98,12 @@ export const AuthProvider = ({ children }) => {
     }
   }, []);
 
+  const isCollege = isCollegeStudent(user);
+
   const value = {
     user,
     token,
+    isCollege,
     isAuthenticated: Boolean(token && user),
     isLoading,
     error,

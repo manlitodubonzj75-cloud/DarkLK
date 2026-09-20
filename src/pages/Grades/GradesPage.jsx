@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { lkService, formatDisplayDate, cacheService } from '../../api';
+import { lkService, formatDisplayDate, parseLessonDate, isPastDate, cacheService } from '../../api';
 import { Card } from '../../components/common/Card';
 import { Icons } from '../../components/common/Icons';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
@@ -24,7 +24,7 @@ function getGradeStyle(grade) {
 }
 
 export const GradesPage = () => {
-  const { user } = useAuth();
+  const { user, isCollege } = useAuth();
   const navigate = useNavigate();
 
   const getCachedProgress = () => {
@@ -166,7 +166,9 @@ export const GradesPage = () => {
                 {currentSemesterInfo.course} курс, {currentSemesterInfo.semester} семестр (текущий) •{' '}
               </span>
             ) : null}
-            Оценки за занятия, баллы модулей БАРС и допуск к сессии
+            {isCollege
+              ? 'Оценки за занятия, посещаемость и допуск к сессии'
+              : 'Оценки за занятия, баллы модулей БАРС и допуск к сессии'}
           </p>
         </div>
 
@@ -245,7 +247,7 @@ export const GradesPage = () => {
             <Icons.Calendar size={26} />
           </div>
           <div>
-            <span className="text-xs font-medium text-textMuted dark:text-[#8E98A8]">Пропуски за семестр</span>
+            <span className="text-xs font-medium text-textMuted dark:text-[#8E98A8]">{isCollege ? "Пропущено пар" : "Пропуски за семестр"}</span>
             <p className={`text-2xl font-black ${
               semesterSummary.totalPasses > 0 ? 'text-amber-600 dark:text-[#E5983A]' : 'text-emerald-600 dark:text-[#34D399]'
             }`}>
@@ -332,10 +334,10 @@ export const GradesPage = () => {
                   </div>
                 </div>
 
-                {/* BOTTOM ROW: ALWAYS QUICK-DISPLAY MODULE SCORES, GRADES & ABSENCES */}
-                {(hasModuleScores || hasGrades || disc.passes > 0) && (
+                {/* BOTTOM ROW: QUICK-DISPLAY MODULE SCORES, COLLEGE LESSON STATS, GRADES & ABSENCES */}
+                {(hasModuleScores || hasGrades || disc.passes > 0 || (disc.flawGrape > 0 && !hasAccess) || disc.countPractice > 0) && (
                   <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-border/80 dark:border-[#2B3242]/70">
-                    {/* Module Scores Pills (e.g. [БМ1: 0 б.] [БМ2: 0 б.]) */}
+                    {/* Module Scores Pills (Bachelor) */}
                     {hasModuleScores && disc.moduleScores.map((mod, mIdx) => (
                       <div
                         key={mIdx}
@@ -346,7 +348,7 @@ export const GradesPage = () => {
                       </div>
                     ))}
 
-                    {/* Non-zero Received Lesson Grades (Оценки за занятия) */}
+                    {/* Non-zero Received Lesson Grades */}
                     {hasGrades && (
                       <div className="flex items-center space-x-1.5 ml-1">
                         <span className="text-xs font-bold text-textMuted dark:text-[#8E98A8]">Оценки:</span>
@@ -363,16 +365,112 @@ export const GradesPage = () => {
                       </div>
                     )}
 
+                    {/* College: FlawGrape (missing positive grades needed for admission) */}
+                    {disc.flawGrape > 0 && !hasAccess && (
+                      <div className="flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-amber-50 dark:bg-[#34251B] text-amber-700 dark:text-[#E5983A] border border-amber-200 dark:border-[#4A3323] text-xs font-semibold">
+                        <span>Не хватает оценок: {disc.flawGrape}</span>
+                      </div>
+                    )}
+
+                    {/* College: CountPractice (number of practical classes) */}
+                    {disc.countPractice > 0 && (
+                      <div className="flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-bg dark:bg-[#181C26] border border-border dark:border-[#2B3242] text-xs font-semibold text-textMuted dark:text-[#8E98A8]">
+                        <span>Практик: {disc.countPractice}</span>
+                      </div>
+                    )}
+
                     {/* Absence Tag */}
                     {disc.passes > 0 && (
                       <div className="flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-amber-50 dark:bg-[#34251B] text-amber-700 dark:text-[#E5983A] border border-amber-200 dark:border-[#4A3323] text-xs font-semibold ml-auto">
-                        <span>Пропуски: {disc.passes}</span>
+                        <span>{isCollege ? `Пропущено: ${disc.passes} пар` : `Пропуски: ${disc.passes}`}</span>
                       </div>
                     )}
                   </div>
                 )}
 
-                {/* Expanded Detailed View (Themes, Lesson Dates, Seminar Ball) */}
+                {/* Expanded Detailed View for College (Lessons Journal: Dates, Turnout, Lateness, Ratings) */}
+                {isExpanded && Array.isArray(disc.lessons) && disc.lessons.length > 0 && (
+                  <div className="mt-4 pt-4 border-t border-border/80 dark:border-[#2B3242] space-y-3 animate-in fade-in duration-150">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-textMuted dark:text-[#8E98A8]">
+                        Журнал занятий и оценки
+                      </h4>
+                      <span className="text-[11px] text-textMuted dark:text-[#8E98A8]">
+                        Всего занятий: {disc.lessons.length}
+                      </span>
+                    </div>
+
+                    <div className="space-y-2 mt-2">
+                      {disc.lessons.map((lesson, lIdx) => {
+                        const ratings = Array.isArray(lesson.ratings) ? lesson.ratings.filter(r => r > 0) : [];
+                        const lessonDate = parseLessonDate(lesson.date);
+                        const isPast = lessonDate && isPastDate(lessonDate);
+                        const isMissed = isPast && !lesson.turnout && ratings.length === 0;
+                        const isPresent = lesson.turnout || ratings.length > 0;
+
+                        return (
+                          <div
+                            key={lIdx}
+                            className="flex items-center justify-between p-3 rounded-xl bg-bg dark:bg-[#181C26] border border-border/80 dark:border-[#2B3242] text-xs gap-3"
+                          >
+                            <div className="flex items-center space-x-3 min-w-0">
+                              <span className="font-bold text-dark dark:text-white shrink-0">
+                                {formatDisplayDate(lesson.date) || lesson.date}
+                              </span>
+                              <div className="min-w-0">
+                                {lesson.teacher && (
+                                  <p className="text-textMuted dark:text-[#8E98A8] truncate">
+                                    {lesson.teacher}
+                                  </p>
+                                )}
+                                {lesson.subgroup ? (
+                                  <p className="text-[10px] text-textMuted dark:text-[#8E98A8]">
+                                    Подгруппа {lesson.subgroup}
+                                  </p>
+                                ) : null}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center space-x-2 shrink-0">
+                              {lesson.lateness && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-600 dark:text-[#E5983A] border border-amber-500/30">
+                                  Опоздание
+                                </span>
+                              )}
+
+                              {ratings.length > 0 ? (
+                                <div className="flex space-x-1">
+                                  {ratings.map((r, rIdx) => (
+                                    <span
+                                      key={rIdx}
+                                      className={`w-6 h-6 flex items-center justify-center rounded-lg text-xs font-black border ${getGradeStyle(r)}`}
+                                    >
+                                      {r}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : isPresent ? (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-600 dark:text-[#34D399] border border-emerald-500/30">
+                                  Посещено
+                                </span>
+                              ) : isMissed ? (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/30">
+                                  Пропуск
+                                </span>
+                              ) : (
+                                <span className="text-[11px] text-textMuted dark:text-[#8E98A8]">
+                                  Запланировано
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Expanded Detailed View for Bachelor (Themes, Modules, Seminar Ball) */}
                 {isExpanded && Array.isArray(disc.modules) && disc.modules.length > 0 && (
                   <div className="mt-4 pt-4 border-t border-border/80 dark:border-[#2B3242] space-y-3 animate-in fade-in duration-150">
                     <h4 className="text-xs font-bold uppercase tracking-wider text-textMuted dark:text-[#8E98A8]">
@@ -415,6 +513,15 @@ export const GradesPage = () => {
                         ))}
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {/* If expanded and neither modules nor lessons found */}
+                {isExpanded && (!disc.modules?.length && !disc.lessons?.length) && (
+                  <div className="mt-4 pt-4 border-t border-border/80 dark:border-[#2B3242] text-center py-2">
+                    <p className="text-xs text-textMuted dark:text-[#8E98A8]">
+                      Нет детальных записей о занятиях по этой дисциплине
+                    </p>
                   </div>
                 )}
               </Card>

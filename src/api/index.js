@@ -9,5 +9,8 @@ export {
   formatLessonTime,
   getMondayOfWeek,
   detectActiveSemester,
-  filterSemesterProgress
+  filterSemesterProgress,
+  isCollegeStudent,
+  parseLessonDate,
+  isPastDate
 } from './lkService';

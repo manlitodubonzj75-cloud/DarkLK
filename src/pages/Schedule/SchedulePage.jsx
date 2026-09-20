@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useAuth } from '../../context/AuthContext';
 import { lkService, formatISODate, getMondayOfWeek, formatLessonTime, cacheService } from '../../api';
 import { Card } from '../../components/common/Card';
 import { Badge } from '../../components/common/Badge';
@@ -7,6 +8,7 @@ import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { ErrorMessage } from '../../components/common/ErrorMessage';
 
 export const SchedulePage = () => {
+  const { isCollege } = useAuth();
   const [viewMode, setViewMode] = useState('week'); // 'week' | 'month'
   const [currentMonday, setCurrentMonday] = useState(() => getMondayOfWeek(new Date()));
   const [currentMonthDate, setCurrentMonthDate] = useState(() => {
@@ -54,32 +56,25 @@ export const SchedulePage = () => {
     }
   }, []);
 
-  // Fetch Month Schedule
+  // Fetch Month Schedule (using getScheduleRange from 1st of month to last of month)
   const fetchMonthSchedule = useCallback(async (monthDate) => {
     const year = monthDate.getFullYear();
     const month = monthDate.getMonth();
-    
-    // First day of month
     const firstDay = new Date(year, month, 1);
-    const rangeStart = getMondayOfWeek(firstDay);
-    
-    // Last day of month
     const lastDay = new Date(year, month + 1, 0);
-    const rangeEnd = new Date(getMondayOfWeek(lastDay));
-    rangeEnd.setDate(rangeEnd.getDate() + 6);
 
-    const from = formatISODate(rangeStart);
-    const to = formatISODate(rangeEnd);
-    const cacheKey = `schedule_${from}_${to}`;
-    const cached = cacheService.get(cacheKey);
+    const from = formatISODate(firstDay);
+    const to = formatISODate(lastDay);
 
-    if (cached) {
+    const cached = cacheService.get(`schedule_${from}_${to}`);
+    if (cached && Array.isArray(cached) && cached.length > 0) {
       setScheduleData(cached);
       setIsLoading(false);
     } else {
       setIsLoading(true);
     }
     setError(null);
+
     try {
       const data = await lkService.getScheduleRange(from, to);
       if (Array.isArray(data) && data.length > 0) {
@@ -87,14 +82,14 @@ export const SchedulePage = () => {
       }
     } catch (err) {
       if (!cached) {
-        setError(err.message || 'Не удалось загрузить расписание месяца');
+        setError(err.message || 'Не удалось загрузить расписание на месяц');
       }
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  // Sync data whenever currentMonday or currentMonthDate or viewMode changes
+  // Trigger fetch depending on viewMode
   useEffect(() => {
     if (viewMode === 'week') {
       fetchWeekSchedule(currentMonday);
@@ -103,93 +98,122 @@ export const SchedulePage = () => {
     }
   }, [viewMode, currentMonday, currentMonthDate, fetchWeekSchedule, fetchMonthSchedule]);
 
-  // Pull-to-refresh listener
+  // Listen for mobile pull-to-refresh
   useEffect(() => {
-    const handlePull = () => {
-      const from = formatISODate(currentMonday);
-      const toDate = new Date(currentMonday);
-      toDate.setDate(currentMonday.getDate() + 6);
-      const to = formatISODate(toDate);
-      cacheService.remove(`schedule_${from}_${to}`);
-      if (viewMode === "week") {
+    const handlePullRefresh = () => {
+      if (viewMode === 'week') {
+        const from = formatISODate(currentMonday);
+        const toDate = new Date(currentMonday);
+        toDate.setDate(currentMonday.getDate() + 6);
+        const to = formatISODate(toDate);
+        cacheService.remove(`schedule_${from}_${to}`);
         fetchWeekSchedule(currentMonday);
       } else {
+        const year = currentMonthDate.getFullYear();
+        const month = currentMonthDate.getMonth();
+        const from = formatISODate(new Date(year, month, 1));
+        const to = formatISODate(new Date(year, month + 1, 0));
+        cacheService.remove(`schedule_${from}_${to}`);
         fetchMonthSchedule(currentMonthDate);
       }
     };
-    window.addEventListener("app-pull-to-refresh", handlePull);
-    return () => window.removeEventListener("app-pull-to-refresh", handlePull);
+
+    window.addEventListener("app-pull-to-refresh", handlePullRefresh);
+    return () => window.removeEventListener("app-pull-to-refresh", handlePullRefresh);
   }, [viewMode, currentMonday, currentMonthDate, fetchWeekSchedule, fetchMonthSchedule]);
 
-  // Week Days (Mon-Sat)
+  // Days of current week (Mon - Sat)
   const weekDays = useMemo(() => {
-    return Array.from({ length: 6 }, (_, i) => {
+    const days = [];
+    const dayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+    for (let i = 0; i < 6; i++) {
       const d = new Date(currentMonday);
       d.setDate(currentMonday.getDate() + i);
       const iso = formatISODate(d);
-      const daySchedule = scheduleData.find(item => item.title === iso);
-      const hasLessons = Boolean(daySchedule && Array.isArray(daySchedule.data) && daySchedule.data.length > 0);
-
-      return {
-        date: d,
+      const hasLessons = scheduleData.some(day => day.title === iso && Array.isArray(day.data) && day.data.length > 0);
+      days.push({
         iso,
-        dayName: ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'][d.getDay()],
         dayNumber: d.getDate(),
+        name: dayNames[i],
         isToday: iso === formatISODate(new Date()),
         hasLessons
-      };
-    });
+      });
+    }
+    return days;
   }, [currentMonday, scheduleData]);
 
-  // Month Grid Days (Mon-Sat)
+  // Month grid days (Mon - Sat only, skipping Sundays)
   const monthGridDays = useMemo(() => {
     if (viewMode !== 'month') return [];
-    
+
     const year = currentMonthDate.getFullYear();
     const month = currentMonthDate.getMonth();
     const firstDayOfMonth = new Date(year, month, 1);
-    const startMonday = getMondayOfWeek(firstDayOfMonth);
-    
     const lastDayOfMonth = new Date(year, month + 1, 0);
-    const endMonday = getMondayOfWeek(lastDayOfMonth);
-    const endSunday = new Date(endMonday);
-    endSunday.setDate(endMonday.getDate() + 5); // Saturday
-    
-    const days = [];
-    const curr = new Date(startMonday);
 
-    while (curr <= endSunday) {
-      // Exclude Sunday (day 0) to match Mon-Sat timetable
-      if (curr.getDay() !== 0) {
-        const iso = formatISODate(curr);
-        const daySchedule = scheduleData.find(item => item.title === iso);
-        const hasLessons = Boolean(daySchedule && Array.isArray(daySchedule.data) && daySchedule.data.length > 0);
-        
-        days.push({
-          date: new Date(curr),
+    const result = [];
+    let startDayOfWeek = firstDayOfMonth.getDay();
+    if (startDayOfWeek === 0) startDayOfWeek = 7; // Sunday -> 7
+
+    for (let i = 1; i < startDayOfWeek; i++) {
+      const prevDate = new Date(year, month, 1 - (startDayOfWeek - i));
+      if (prevDate.getDay() !== 0) {
+        result.push({
+          iso: formatISODate(prevDate),
+          dayNumber: prevDate.getDate(),
+          isCurrentMonth: false,
+          isToday: formatISODate(prevDate) === formatISODate(new Date()),
+          hasLessons: false
+        });
+      }
+    }
+
+    for (let day = 1; day <= lastDayOfMonth.getDate(); day++) {
+      const curDate = new Date(year, month, day);
+      if (curDate.getDay() !== 0) { // Skip Sunday
+        const iso = formatISODate(curDate);
+        const hasLessons = scheduleData.some(d => d.title === iso && Array.isArray(d.data) && d.data.length > 0);
+        result.push({
           iso,
-          dayNumber: curr.getDate(),
-          isCurrentMonth: curr.getMonth() === month,
+          dayNumber: day,
+          isCurrentMonth: true,
           isToday: iso === formatISODate(new Date()),
           hasLessons
         });
       }
-      curr.setDate(curr.getDate() + 1);
     }
-    return days;
-  }, [viewMode, currentMonthDate, scheduleData]);
+
+    const remainder = result.length % 6;
+    if (remainder !== 0) {
+      const fillCount = 6 - remainder;
+      for (let i = 1; i <= fillCount; i++) {
+        const nextDate = new Date(year, month + 1, i);
+        if (nextDate.getDay() !== 0) {
+          result.push({
+            iso: formatISODate(nextDate),
+            dayNumber: nextDate.getDate(),
+            isCurrentMonth: false,
+            isToday: formatISODate(nextDate) === formatISODate(new Date()),
+            hasLessons: false
+          });
+        }
+      }
+    }
+
+    return result;
+  }, [currentMonthDate, scheduleData, viewMode]);
 
   // Week navigation
   const handlePrevWeek = () => {
     const prev = new Date(currentMonday);
-    prev.setDate(currentMonday.getDate() - 7);
+    prev.setDate(prev.getDate() - 7);
     setCurrentMonday(prev);
     setSelectedDateISO(formatISODate(prev));
   };
 
   const handleNextWeek = () => {
     const next = new Date(currentMonday);
-    next.setDate(currentMonday.getDate() + 7);
+    next.setDate(next.getDate() + 7);
     setCurrentMonday(next);
     setSelectedDateISO(formatISODate(next));
   };
@@ -239,7 +263,7 @@ export const SchedulePage = () => {
             Расписание
           </h1>
           <p className="text-xs font-medium text-textMuted dark:text-[#8E98A8] mt-0.5">
-            Учебные занятия, семинары и отработки
+            {isCollege ? 'Учебные занятия и семинары' : 'Учебные занятия, семинары и отработки'}
           </p>
         </div>
 
@@ -298,25 +322,22 @@ export const SchedulePage = () => {
               <button
                 key={item.iso}
                 onClick={() => setSelectedDateISO(item.iso)}
-                className={`p-2 sm:p-2.5 rounded-2xl flex flex-col items-center justify-center transition-all min-w-0 overflow-hidden ${
+                className={`py-3 px-1 sm:px-2 rounded-2xl flex flex-col items-center justify-center transition-all duration-150 min-w-0 ${
                   isSelected
-                    ? 'bg-primary text-white shadow-md font-bold scale-[1.02]'
+                    ? 'bg-primary dark:bg-[#1E6685] text-white shadow-md scale-[1.02]'
                     : item.isToday
-                    ? 'bg-accent/15 text-accent dark:text-[#38BDF8] font-semibold border border-accent/40'
-                    : 'bg-card border border-border dark:border-[#2B3242] text-textMuted dark:text-[#8E98A8] hover:bg-bg dark:hover:bg-[#262D3D]'
+                    ? 'bg-accent/15 text-accent dark:text-[#38BDF8] border border-accent/40 dark:border-[#22869A]/50'
+                    : 'bg-card dark:bg-[#1F2430] border border-border dark:border-[#2B3242] text-dark dark:text-white hover:border-accent dark:hover:border-[#38BDF8]'
                 }`}
               >
-                {/* 1. День недели */}
-                <span className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider leading-none">
-                  {item.dayName}
-                </span>
-
-                {/* 2. Интерпункт(·) если есть занятия, иначе пустое пространство */}
-                <span className="text-base font-black my-0.5 leading-none h-3.5 flex items-center justify-center select-none">
-                  {item.hasLessons ? '·' : '\u00A0'}
-                </span>
-
-                {/* 3. Число */}
+                <div className="flex items-center space-x-1 mb-1">
+                  <span className={`text-[10px] sm:text-xs font-bold uppercase ${isSelected ? 'text-white/80' : 'text-textMuted dark:text-[#8E98A8]'}`}>
+                    {item.name}
+                  </span>
+                  {item.hasLessons && (
+                    <span className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-white' : 'bg-secondary dark:bg-[#38BDF8]'}`} />
+                  )}
+                </div>
                 <span className="text-base sm:text-lg font-black leading-none">
                   {item.dayNumber}
                 </span>
@@ -353,16 +374,16 @@ export const SchedulePage = () => {
                       : item.isToday
                       ? 'bg-accent/15 text-accent dark:text-[#38BDF8] font-bold border border-accent/40'
                       : item.isCurrentMonth
-                      ? 'bg-bg dark:bg-[#12151B] text-dark dark:text-white hover:bg-card border border-transparent'
-                      : 'bg-transparent text-textMuted/40 dark:text-[#8E98A8]/30 hover:bg-bg/50'
+                      ? 'bg-card border border-border/80 dark:border-[#2B3242] text-dark dark:text-white hover:border-accent'
+                      : 'bg-bg/60 dark:bg-[#12151B]/50 border border-transparent text-textMuted/40 dark:text-[#8E98A8]/40'
                   }`}
                 >
-                  <span className="text-xs sm:text-sm font-extrabold leading-none">
+                  <span className="text-xs sm:text-sm font-black leading-none">
                     {item.dayNumber}
                   </span>
-                  <span className="text-sm font-black mt-0.5 leading-none h-2.5 flex items-center justify-center select-none">
-                    {item.hasLessons ? '·' : '\u00A0'}
-                  </span>
+                  {item.hasLessons && (
+                    <span className={`w-1.5 h-1.5 rounded-full mt-1 ${isSelected ? 'bg-white' : 'bg-secondary dark:bg-[#38BDF8]'}`} />
+                  )}
                 </button>
               );
             })}
@@ -396,7 +417,7 @@ export const SchedulePage = () => {
           </div>
           <h3 className="text-base font-bold text-dark dark:text-white">В этот день занятий нет</h3>
           <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-1">
-            На выбранную дату в системе не назначено пар или отработок.
+            {isCollege ? 'На выбранную дату в системе не назначено пар.' : 'На выбранную дату в системе не назначено пар или отработок.'}
           </p>
         </Card>
       ) : (
@@ -419,19 +440,19 @@ export const SchedulePage = () => {
                     </Badge>
                   )}
                   {lesson.corps && (
-                    <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-bg dark:bg-[#12151B] text-textMuted dark:text-[#8E98A8] border border-border dark:border-[#2B3242] shrink-0">
+                    <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-bg dark:bg-[#181C26] text-textMuted dark:text-[#8E98A8] border border-border dark:border-[#2B3242] shrink-0">
                       {lesson.corps}
                     </span>
                   )}
                 </div>
               </div>
 
-              {/* Body: Full-width discipline title */}
+              {/* Middle row: Full Discipline Title */}
               <h4 className="text-base sm:text-lg font-bold text-dark dark:text-white leading-snug break-words">
                 {lesson.discipline || lesson.subject}
               </h4>
 
-              {/* Footer: Auditory & Teacher */}
+              {/* Bottom row: Auditory & Teacher */}
               {(lesson.auditory || lesson.teacher) && (
                 <div className="mt-3 pt-2.5 border-t border-border dark:border-[#2B3242] flex flex-wrap items-center justify-between gap-2 text-xs text-textMuted dark:text-[#8E98A8]">
                   {lesson.auditory && (
@@ -440,10 +461,9 @@ export const SchedulePage = () => {
                     </span>
                   )}
                   {lesson.teacher && (
-                    <div className="flex items-center space-x-1 text-secondary dark:text-[#38BDF8] font-medium truncate">
-                      <Icons.User size={14} className="shrink-0" />
-                      <span className="truncate">{lesson.teacher}</span>
-                    </div>
+                    <span className="text-secondary dark:text-[#38BDF8] font-medium">
+                      {lesson.teacher}
+                    </span>
                   )}
                 </div>
               )}

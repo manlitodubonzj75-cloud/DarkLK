@@ -1,8 +1,9 @@
 import { apiClient } from './client';
 import { cacheService } from './cacheService';
+import { cryptoStorage } from './cryptoStorage';
 
 /**
- * Format a Date object to YYYY-MM-DD
+ * Format Date to YYYY-MM-DD
  */
 export function formatISODate(date) {
   const d = new Date(date);
@@ -13,98 +14,135 @@ export function formatISODate(date) {
 }
 
 /**
- * Safely format a date for display.
- * Returns null if the date is a placeholder like '0001-01-01', invalid, or earlier than 2000.
+ * Format ISO Date string to Russian display date (e.g. 15 сентября)
  */
 export function formatDisplayDate(dateStr) {
-  if (!dateStr) return null;
-  const s = String(dateStr).trim();
-  if (s.startsWith('0001') || s.startsWith('0000') || s.startsWith('1970')) {
-    return null;
+  if (!dateStr || dateStr.startsWith('0001-01-01')) return '';
+  // Support DD.MM.YYYY format
+  if (/^\d{2}\.\d{2}\.\d{4}$/.test(dateStr)) {
+    const [dd, mm, yyyy] = dateStr.split('.');
+    const d = new Date(`${yyyy}-${mm}-${dd}`);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+    }
   }
   const d = new Date(dateStr);
-  if (isNaN(d.getTime()) || d.getFullYear() < 2000) {
-    return null;
-  }
-  return d.toLocaleDateString('ru-RU', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric'
-  });
+  if (isNaN(d.getTime()) || d.getFullYear() <= 1970) return '';
+  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
 /**
- * Robust float score parser (handles numbers, strings with Russian comma like "3,75", nulls)
+ * Parse lesson date string (DD.MM.YYYY or ISO) into Date object
  */
-export function parseScore(val) {
-  if (val === null || val === undefined) return 0;
+export function parseLessonDate(dateStr) {
+  if (!dateStr) return null;
+  const parts = String(dateStr).trim().split('.');
+  if (parts.length === 3) {
+    const d = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10) - 1;
+    const y = parseInt(parts[2], 10);
+    if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
+      return new Date(y, m, d);
+    }
+  }
+  const iso = new Date(dateStr);
+  if (!isNaN(iso.getTime())) return iso;
+  return null;
+}
+
+/**
+ * Check if a date is strictly before today (00:00)
+ */
+export function isPastDate(d) {
+  if (!d) return false;
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (d < todayStart) return true;
+  if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) {
+    return now.getHours() >= 16;
+  }
+  return false;
+}
+
+/**
+ * Format lesson time range (e.g. 09:00 - 10:30)
+ */
+export function formatLessonTime(lesson) {
+  const start = lesson.start || lesson.timeStart || lesson.lesson_start || lesson.start_time;
+  const end = lesson.end || lesson.timeEnd || lesson.lesson_end || lesson.end_time;
+  if (!start) return '';
+  const cleanStart = start.slice(0, 5);
+  const cleanEnd = end ? end.slice(0, 5) : '';
+  return cleanEnd ? `${cleanStart} — ${cleanEnd}` : cleanStart;
+}
+
+/**
+ * Calculate the Monday of the given date's week
+ */
+export function getMondayOfWeek(date) {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+  d.setDate(diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+/**
+ * Clean discipline names for robust matching between endpoints
+ */
+function normalizeDisciplineName(name) {
+  if (!name) return '';
+  return name.toLowerCase().replace(/[^a-zа-я0-9]/gi, '').trim();
+}
+
+/**
+ * Parse any score / mediumScore value safely
+ */
+function parseScore(val) {
+  if (val === null || val === undefined || val === '') return 0;
   if (typeof val === 'number') return isNaN(val) ? 0 : val;
-  if (typeof val === 'string') {
-    const cleaned = val.replace(',', '.').trim();
-    const num = parseFloat(cleaned);
-    return isNaN(num) ? 0 : num;
-  }
+  const cleaned = String(val).replace(',', '.').replace(/[^0-9.]/g, '');
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? 0 : n;
+}
+
+/**
+ * Parse single grade safely
+ */
+function parseGrade(val) {
+  if (val === null || val === undefined || val === '') return 0;
+  const num = parseInt(val, 10);
+  if (!isNaN(num) && num >= 2 && num <= 5) return num;
   return 0;
 }
 
 /**
- * Robust integer grade parser (handles 5, 4, 3, 2, strings, ignores 0)
+ * Detect whether the user object belongs to a College student.
+ * Checks subrole ('COLLEGE'), department (contains 'колледж'), faculty, group (starts with 'КП'), or speciality.
  */
-export function parseGrade(val) {
-  if (val === null || val === undefined) return 0;
-  if (typeof val === 'number') return Math.round(val);
-  if (typeof val === 'string') {
-    const cleaned = val.replace(',', '.').trim();
-    const num = parseInt(cleaned, 10);
-    return isNaN(num) ? 0 : num;
-  }
-  return 0;
+export function isCollegeStudent(user) {
+  if (!user) return false;
+  const subrole = String(user.subrole || '').toLowerCase();
+  const dept = String(user.department || '').toLowerCase();
+  const fac = String(user.faculty || '').toLowerCase();
+  const group = String(user.group || '').toLowerCase();
+  const spec = String(user.speciality || '').toLowerCase();
+
+  return (
+    subrole.includes('college') ||
+    dept.includes('колледж') ||
+    fac.includes('колледж') ||
+    group.startsWith('кп') ||
+    spec.includes('колледж')
+  );
 }
 
 /**
- * Get Monday of a given date's week
- */
-/**
- * Format lesson time from datetime/time strings (e.g. "14.09.2026 09:00:00", "2026-09-14T09:00:00", "09:00:00", "09:00")
- * to clean "H:mm" format (e.g. "9:00", "11:30").
- */
-export function formatLessonTime(timeStr) {
-  if (!timeStr) return "--:--";
-  const s = String(timeStr).trim();
-  if (!s) return "--:--";
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return "--:--";
-
-  const match = s.match(/(?:^|[\sT])(\d{1,2}):(\d{2})(?::\d{2})?/);
-  if (match) {
-    const hours = parseInt(match[1], 10);
-    const minutes = match[2];
-    return `${hours}:${minutes}`;
-  }
-  return s.length >= 5 ? s.substring(0, 5) : s;
-}
-
-export function getMondayOfWeek(d = new Date()) {
-  const date = new Date(d);
-  const day = date.getDay();
-  const diff = date.getDate() - day + (day === 0 ? -6 : 1);
-  return new Date(date.setDate(diff));
-}
-
-/**
- * Normalize discipline name string for robust matching across endpoints
- */
-export function normalizeDisciplineName(name) {
-  return (name || '')
-    .toLowerCase()
-    .replace(/[@()«»"'\s\-_]/g, '')
-    .trim();
-}
-
-/**
- * Detect the actual current semester based on calendar date, curriculum list, and user data.
- * Educational calendar rules in Russia:
- * - Autumn semester: September 1 – January 31 (months 8..11, 0) -> ODD semesters (1, 3, 5, 7)
- * - Spring semester: February 1 – August 31 (months 1..7) -> EVEN semesters (2, 4, 6, 8)
+ * Accurately detects active semester for current calendar period.
+ * Academic year rules:
+ * - Autumn Semester: September 1 (month 8) - January 31 (month 0). ALWAYS ODD semester (1, 3, 5, 7).
+ * - Spring Semester: February 1 (month 1) - August 31 (month 7). ALWAYS EVEN semester (2, 4, 6, 8).
  */
 export function detectActiveSemester(progressData = [], user = null, studentInfo = null) {
   const now = new Date();
@@ -114,61 +152,54 @@ export function detectActiveSemester(progressData = [], user = null, studentInfo
   let userCourse = Number(user?.course || studentInfo?.course || 0);
   let userSem = Number(user?.semester || studentInfo?.semester || 0);
 
-  // If user Course is known, verify seasonal parity (autumn = odd, spring = even)
-  if (userCourse > 0) {
-    const expectedSem = isAutumn ? (userCourse * 2 - 1) : (userCourse * 2);
-    // If userSem was not set or mismatched with current calendar season, correct it
-    if (!userSem || (isAutumn && userSem % 2 === 0) || (!isAutumn && userSem % 2 === 1)) {
-      userSem = expectedSem;
+  // If user object already specifies course/semester (e.g. College course 3, semester 5)
+  if (userSem > 0 && userCourse > 0) {
+    if (isAutumn && userSem % 2 === 0) {
+      userSem = userSem - 1;
+    } else if (!isAutumn && userSem % 2 !== 0) {
+      userSem = userSem + 1;
     }
+    return {
+      course: userCourse,
+      semester: userSem
+    };
   }
 
-  if (Array.isArray(progressData) && progressData.length > 0) {
-    // 1. Direct match by userSem if present in progressData
+  // 1. If progressData has semester elements
+  if (Array.isArray(progressData) && progressData.length > 0 && progressData[0].semester) {
     if (userSem > 0) {
-      const directMatch = progressData.find(s => {
-        const sSem = Number(s.semester || 0);
-        const sCourse = Number(s.coures || s.course || 0);
-        return sSem === userSem && (!userCourse || !sCourse || sCourse === userCourse);
-      });
-      if (directMatch) {
+      const match = progressData.find(s => Number(s.semester) === userSem);
+      if (match) {
         return {
-          course: Number(directMatch.coures || directMatch.course || userCourse || 1),
+          course: Number(match.coures || match.course || userCourse || 1),
           semester: userSem
         };
       }
     }
 
-    // 2. Filter semesters that belong to the current season (autumn = odd, spring = even)
-    const seasonalSemesters = progressData.filter(s => {
-      const semNum = Number(s.semester || 0);
-      return isAutumn ? (semNum % 2 === 1) : (semNum % 2 === 0);
-    });
-
-    if (seasonalSemesters.length > 0) {
-      // Pick the latest semester of the current season (e.g. in September pick 5, never 6)
-      let latestSeason = seasonalSemesters[0];
-      seasonalSemesters.forEach(s => {
-        if (Number(s.semester || 0) > Number(latestSeason.semester || 0)) {
-          latestSeason = s;
-        }
-      });
-
-      return {
-        course: Number(latestSeason.coures || latestSeason.course || userCourse || 1),
-        semester: Number(latestSeason.semester)
-      };
+    if (userCourse > 0) {
+      const expectedSem = isAutumn ? (userCourse * 2 - 1) : (userCourse * 2);
+      const semMatch = progressData.find(s => Number(s.semester) === expectedSem);
+      if (semMatch) {
+        return {
+          course: userCourse,
+          semester: expectedSem
+        };
+      }
     }
 
-    // 3. Fallback: if last item is a future spring semester during autumn, pick the previous semester
-    const lastItem = progressData[progressData.length - 1];
-    const lastSem = Number(lastItem.semester || 0);
-    if (isAutumn && lastSem % 2 === 0 && progressData.length > 1) {
-      const prevItem = progressData[progressData.length - 2];
-      return {
-        course: Number(prevItem.coures || prevItem.course || 1),
-        semester: Number(prevItem.semester || 1)
-      };
+    // 3. Fallback to latest semester in progressData
+    const sorted = [...progressData].sort((a, b) => Number(a.semester || 0) - Number(b.semester || 0));
+    const lastItem = sorted[sorted.length - 1];
+    let lastSem = Number(lastItem.semester || 1);
+    if (isAutumn && lastSem % 2 === 0) {
+      const autumnCandidate = sorted.reverse().find(s => Number(s.semester) % 2 !== 0);
+      if (autumnCandidate) {
+        return {
+          course: Number(autumnCandidate.coures || autumnCandidate.course || 1),
+          semester: Number(autumnCandidate.semester)
+        };
+      }
     }
 
     return {
@@ -206,11 +237,16 @@ export function filterSemesterProgress(data, targetCourse, targetSemester) {
 
   // Fallback: flat list of disciplines (College format)
   if (data.length > 0 && (data[0].discipline || data[0].name) && !data[0].disciplines) {
-    return data.filter(d => {
-      const itemCourse = Number(d.course || 0);
-      const itemSemester = Number(d.semester || 0);
-      return (!itemCourse || itemCourse === cNum) && (!itemSemester || itemSemester === sNum);
-    });
+    const hasSem = data.some(d => d.semester !== undefined);
+    if (hasSem) {
+      return data.filter(d => {
+        const itemCourse = Number(d.course || 0);
+        const itemSemester = Number(d.semester || 0);
+        return (!itemCourse || itemCourse === cNum) && (!itemSemester || itemSemester === sNum);
+      });
+    }
+    // Disciplines array returned specifically for query params course & semester
+    return data;
   }
 
   return [];
@@ -218,18 +254,16 @@ export function filterSemesterProgress(data, targetCourse, targetSemester) {
 
 export const lkService = {
   /**
-   * Schedule for a specific week: GET /schedule?from=YYYY-MM-DD&to=YYYY-MM-DD
-   */
-  /**
    * Schedule for an arbitrary range (e.g. whole month): GET /schedule?from=YYYY-MM-DD&to=YYYY-MM-DD
    */
   async getScheduleRange(from, to) {
     const cacheKey = `schedule_${from}_${to}`;
 
     return cacheService.withOfflineFallback(cacheKey, async () => {
+      const isCollege = isCollegeStudent(cryptoStorage.getUser());
       const [scheduleResp, consultationsResp] = await Promise.allSettled([
         apiClient(`/schedule?from=${from}&to=${to}`),
-        apiClient(`/consultation/student?from=${from}&to=${to}`).catch(() => [])
+        !isCollege ? apiClient(`/consultation/student?from=${from}&to=${to}`).catch(() => []) : Promise.resolve([])
       ]);
 
       const scheduleData = scheduleResp.status === "fulfilled" ? scheduleResp.value : [];
@@ -249,9 +283,10 @@ export const lkService = {
     const cacheKey = `schedule_${from}_${to}`;
 
     return cacheService.withOfflineFallback(cacheKey, async () => {
+      const isCollege = isCollegeStudent(cryptoStorage.getUser());
       const [scheduleResp, consultationsResp] = await Promise.allSettled([
         apiClient(`/schedule?from=${from}&to=${to}`),
-        apiClient(`/consultation/student?from=${from}&to=${to}`).catch(() => [])
+        !isCollege ? apiClient(`/consultation/student?from=${from}&to=${to}`).catch(() => []) : Promise.resolve([])
       ]);
 
       const scheduleData = scheduleResp.status === 'fulfilled' ? scheduleResp.value : [];
@@ -261,57 +296,49 @@ export const lkService = {
     });
   },
 
-  mergeScheduleWithConsultations(scheduleDays = [], consultations = []) {
-    if (!Array.isArray(scheduleDays)) return [];
-    if (!Array.isArray(consultations) || consultations.length === 0) return scheduleDays;
+  /**
+   * Merges consultations with normal schedule items and sorts by time
+   */
+  mergeScheduleWithConsultations(scheduleList, consultations) {
+    if (!Array.isArray(scheduleList)) return [];
+    if (!Array.isArray(consultations) || consultations.length === 0) return scheduleList;
 
-    const daysMap = new Map();
+    const result = scheduleList.map(day => ({
+      ...day,
+      data: Array.isArray(day.data) ? [...day.data] : []
+    }));
 
-    scheduleDays.forEach(day => {
-      const dateKey = day.title || day.date || '';
-      daysMap.set(dateKey, {
-        title: dateKey,
-        data: Array.isArray(day.data) ? [...day.data] : []
-      });
-    });
+    consultations.forEach(c => {
+      const consultDateStr = c.date ? c.date.split('T')[0] : null;
+      if (!consultDateStr) return;
 
-    consultations.forEach(slot => {
-      const slotDate = slot.start ? slot.start.slice(0, 10) : (slot.day ? slot.day.slice(0, 10) : '');
-      if (!slotDate) return;
-
-      const consultationLesson = {
-        id: `consultation_${slot.start || Math.random()}`,
-        day: slotDate,
-        start: slot.startConsultation || slot.start || '10:00',
-        end: slot.endConsultation || slot.end || '11:30',
-        groups: [],
-        teacher: slot.teacherName || slot.teacher || 'Консультант',
-        discipline: slot.disciplineName || slot.discipline || 'Консультация',
+      const consultItem = {
+        title: c.discipline || 'Консультация (отработка)',
         type: 'Консультация',
-        corps: slot.corps || '',
-        auditory: slot.auditory || '',
-        homeworkText: slot.themeName ? `Тема: ${slot.themeName}` : null
+        isConsultation: true,
+        start: c.start || c.timeStart || '18:00',
+        end: c.end || c.timeEnd || '19:30',
+        teacher: c.teacher || '',
+        classroom: c.auditory || c.room || 'Кафедра',
+        subgroup: c.subgroup || 0,
+        comment: c.theme || c.comment || '',
+        status: c.status || 'Записан',
+        id: c.id
       };
 
-      if (daysMap.has(slotDate)) {
-        daysMap.get(slotDate).data.push(consultationLesson);
+      const existingDay = result.find(d => d.title === consultDateStr);
+      if (existingDay) {
+        existingDay.data.push(consultItem);
+        existingDay.data.sort((a, b) => (a.start || '').localeCompare(b.start || ''));
       } else {
-        daysMap.set(slotDate, {
-          title: slotDate,
-          data: [consultationLesson]
+        result.push({
+          title: consultDateStr,
+          data: [consultItem]
         });
       }
     });
 
-    const result = Array.from(daysMap.values());
-    result.forEach(day => {
-      day.data.sort((a, b) => {
-        const timeA = (a.start || '').toString();
-        const timeB = (b.start || '').toString();
-        return timeA.localeCompare(timeB);
-      });
-    });
-
+    result.sort((a, b) => a.title.localeCompare(b.title));
     return result;
   },
 
@@ -320,14 +347,11 @@ export const lkService = {
     let activeSem = semester;
 
     if (!activeCourse || !activeSem) {
-      try {
-        const raw = localStorage.getItem("cached_user");
-        if (raw) {
-          const u = JSON.parse(raw);
-          if (!activeCourse && u.course) activeCourse = u.course;
-          if (!activeSem && u.semester) activeSem = u.semester;
-        }
-      } catch (_) {}
+      const cached = cryptoStorage.getUser();
+      if (cached) {
+        if (!activeCourse && cached.course) activeCourse = cached.course;
+        if (!activeSem && cached.semester) activeSem = cached.semester;
+      }
     }
 
     const params = [];
@@ -453,31 +477,210 @@ export const lkService = {
 
   /**
    * FLUTTER PARITY getProgressWithLessons()
-   * Retrieves student progress, verifies the active current semester (e.g. 5 in autumn, never 6),
-   * performs parallel /progress/details queries by disciplineID (matching Flutter _fetchLessons),
-   * extracts modules (with mediumScore), lessons (with ball/ratings), absences, and admission statuses.
+   * Retrieves student progress, verifies active current semester (e.g. 5 in autumn, never 6),
+   * fetches details for Bachelor (modules/BARS) or College (lessons, turnout, ratings, flawGrape),
+   * and calculates overall GPA, absences, and admission statuses.
    */
   async getProgressWithLessons(user = null) {
+    const currentUser = user || cryptoStorage.getUser();
+    const isCollege = isCollegeStudent(currentUser);
+
+    const targetCourse = currentUser?.course;
+    const targetSemester = currentUser?.semester;
+
     // 1. Concurrent fetch of /progress and /student/info
     const [progressResult, studentInfoResult] = await Promise.allSettled([
-      this.getProgress(),
-      this.getStudentInfo().catch(() => ({}))
+      this.getProgress(targetCourse, targetSemester),
+      !isCollege ? this.getStudentInfo().catch(() => ({})) : Promise.resolve({})
     ]);
 
     const rawProgress = progressResult.status === 'fulfilled' ? progressResult.value : [];
     const studentInfo = studentInfoResult.status === 'fulfilled' ? studentInfoResult.value : {};
 
     // 2. Accurately detect the active semester (Autumn = Odd e.g. 5, Spring = Even e.g. 6)
-    const activeInfo = detectActiveSemester(rawProgress, user, studentInfo);
+    const activeInfo = detectActiveSemester(rawProgress, currentUser, studentInfo);
     const activeCourse = activeInfo.course;
     const activeSemester = activeInfo.semester;
 
     const cacheKey = `progress_with_lessons_c${activeCourse}_s${activeSemester}`;
 
     return cacheService.withOfflineFallback(cacheKey, async () => {
+      const isCollegeData = isCollege || (
+        Array.isArray(rawProgress) &&
+        rawProgress.length > 0 &&
+        rawProgress[0].disciplineID &&
+        !rawProgress[0].disciplines
+      );
+
+      // ==========================================
+      // COLLEGE PROGRESS & LESSONS FLOW
+      // ==========================================
+      if (isCollegeData) {
+        const collegeDisciplines = Array.isArray(rawProgress) ? rawProgress : [];
+
+        // Fully asynchronous parallel fetch of /progress/details for all college disciplines
+        const detailsPromises = collegeDisciplines.map(async (d) => {
+          const guid = d.disciplineID || d.id;
+          if (!guid) return null;
+          const discCacheKey = `college_details_${guid}_c${activeCourse}_s${activeSemester}`;
+          const cachedLessons = cacheService.get(discCacheKey);
+
+          try {
+            const res = await apiClient(
+              `/progress/details?disciplineID=${guid}&course=${activeCourse}&semester=${activeSemester}`
+            ).catch(err => {
+              console.warn(`[College Details] Failed for ${d.discipline || guid}:`, err.message);
+              return cachedLessons || [];
+            });
+
+            const lessons = Array.isArray(res) ? res : (Array.isArray(cachedLessons) ? cachedLessons : []);
+            if (Array.isArray(res) && res.length > 0) {
+              cacheService.set(discCacheKey, res);
+            }
+
+            return {
+              disciplineID: guid,
+              lessons
+            };
+          } catch (e) {
+            return { disciplineID: guid, lessons: Array.isArray(cachedLessons) ? cachedLessons : [] };
+          }
+        });
+
+        const settledDetails = await Promise.allSettled(detailsPromises);
+        const detailsMap = new Map();
+        settledDetails.forEach(s => {
+          if (s.status === 'fulfilled' && s.value && s.value.disciplineID) {
+            detailsMap.set(s.value.disciplineID, s.value.lessons);
+          }
+        });
+
+        let totalPasses = 0;
+        let allGrades = [];
+        let allMissedLessons = [];
+        let unadmittedCount = 0;
+
+        const enrichedDisciplines = collegeDisciplines.map((d, idx) => {
+          const discName = (d.discipline || d.name || '').trim();
+          const discId = d.disciplineID || d.id || idx;
+          const lessons = detailsMap.get(discId) || [];
+
+          let passes = 0;
+          let discGrades = [];
+          const teachersSet = new Set();
+
+          lessons.forEach(l => {
+            if (l.teacher) {
+              teachersSet.add(l.teacher.trim());
+            }
+
+            // Extract grades (ratings)
+            const ratingsList = Array.isArray(l.ratings) ? l.ratings : (l.ratings !== undefined ? [l.ratings] : []);
+            ratingsList.forEach(r => {
+              const g = parseGrade(r);
+              if (g > 0) {
+                discGrades.push(g);
+                allGrades.push(g);
+              }
+            });
+
+            // Missed classes: turnout is false AND lesson date was in the past AND no grade
+            const lessonDate = parseLessonDate(l.date);
+            const hasGrade = ratingsList.some(r => parseGrade(r) > 0);
+            if (lessonDate && isPastDate(lessonDate) && !l.turnout && !hasGrade) {
+              passes++;
+              totalPasses++;
+              allMissedLessons.push({
+                discipline: discName,
+                date: l.date,
+                teacher: l.teacher || d.teacher || '',
+                subgroup: l.subgroup || 0
+              });
+            }
+          });
+
+          // Admission status
+          const access = d.access === true || d.access === 1 || String(d.access).toLowerCase() === 'true';
+          if (!access) unadmittedCount++;
+
+          // Clean info / debtReport
+          const info = (d.debtReport || d.info || '').toString().replace(/[\r\n]+/g, ' ').replace(/#/g, ' • ').trim();
+
+          // Average grade for discipline
+          const avgGrade = discGrades.length > 0
+            ? (discGrades.reduce((a, b) => a + b, 0) / discGrades.length).toFixed(2)
+            : null;
+
+          const professors = teachersSet.size > 0 ? Array.from(teachersSet) : (d.teacher ? [d.teacher] : []);
+
+          return {
+            id: discId,
+            disciplineID: discId,
+            name: discName,
+            type: 'Дисциплина',
+            professors,
+            access,
+            info,
+            passes,
+            grades: discGrades,
+            avgGrade,
+            barsScore: null,
+            moduleScores: [],
+            modules: [],
+            lessons,
+            countGrape: Number(d.countGrape) || 0,
+            countPractice: Number(d.countPractice) || 0,
+            flawGrape: Number(d.flawGrape) || 0,
+            flawPractice: Number(d.flawPractice) || 0
+          };
+        });
+
+        // Overall GPA
+        const overallGpa = allGrades.length > 0
+          ? (allGrades.reduce((a, b) => a + b, 0) / allGrades.length).toFixed(2)
+          : '—';
+
+        const totalGradeDistribution = {};
+        allGrades.forEach(g => {
+          totalGradeDistribution[g] = (totalGradeDistribution[g] || 0) + 1;
+        });
+
+        // Sort missed lessons newest date first
+        allMissedLessons.sort((a, b) => {
+          const da = parseLessonDate(a.date);
+          const db = parseLessonDate(b.date);
+          if (da && db) return db - da;
+          return 0;
+        });
+
+        const collegeResult = {
+          activeCourse,
+          activeSemester,
+          disciplines: enrichedDisciplines,
+          gpa: overallGpa,
+          passes: totalPasses,
+          missedLessons: allMissedLessons,
+          totalGradesCount: allGrades.length,
+          gradeDistribution: totalGradeDistribution,
+          unadmittedCount,
+          isAdmitted: unadmittedCount === 0,
+          isCollege: true,
+          studentInfo
+        };
+
+        try {
+          cacheService.set('progress_with_lessons_latest', collegeResult);
+          cacheService.set(cacheKey, collegeResult);
+        } catch (_) {}
+
+        return collegeResult;
+      }
+
+      // ==========================================
+      // BACHELOR PROGRESS & MODULES FLOW
+      // ==========================================
       let targetDisciplines = filterSemesterProgress(rawProgress, activeCourse, activeSemester);
 
-      // 3. Fetch detailed modules for active semester:
       let bulkDetails = [];
       try {
         bulkDetails = await this.getProgressDetails(activeCourse, activeSemester);
@@ -492,8 +695,6 @@ export const lkService = {
         });
       }
 
-      // Mirror Flutter _fetchLessons: for each discipline, if details are missing or have empty modules,
-      // query /progress/details?disciplineID=... in parallel
       if (targetDisciplines.length > 0) {
         const needsFetch = targetDisciplines.filter(d => {
           const key = normalizeDisciplineName(d.name || d.discipline);
@@ -509,7 +710,7 @@ export const lkService = {
               const res = await apiClient(`/progress/details?disciplineID=${guid}&course=${activeCourse}&semester=${activeSemester}`);
               const detObj = Array.isArray(res) ? res[0] : res;
               if (detObj) {
-                const key = normalizeDisciplineName(detObj.discipline || d.name);
+                const key = normalizeDisciplineName(detObj.discipline || d.name || d.discipline);
                 return { key, data: detObj };
               }
             } catch (_) {}
@@ -525,7 +726,6 @@ export const lkService = {
         }
       }
 
-      // 4. Enrich disciplines with real modules, grades, and absence counts
       let totalPasses = 0;
       let allGrades = [];
       let allModuleScores = [];
@@ -572,7 +772,6 @@ export const lkService = {
             const modScore = parseScore(m.mediumScore);
             const modName = (m.module || 'БМ').toString().trim();
 
-            // ALWAYS keep the module for quick display (e.g. [БМ1: 0 б.])
             moduleScores.push({
               name: modName,
               score: modScore,
@@ -583,7 +782,6 @@ export const lkService = {
               allModuleScores.push(modScore);
             }
 
-            // Extract lesson grades and absences from themes
             if (Array.isArray(m.themes)) {
               m.themes.forEach(t => {
                 if (Array.isArray(t.items)) {
@@ -594,7 +792,6 @@ export const lkService = {
                       totalPasses++;
                     }
 
-                    // Extract seminar lesson grade: check ball, ratings, grades
                     let grade = parseGrade(it.ball);
                     if (grade === 0 && it.ratings) {
                       const rList = Array.isArray(it.ratings) ? it.ratings : [it.ratings];
@@ -620,42 +817,16 @@ export const lkService = {
               });
             }
           });
-        } else {
-          // College LK format
-          if (d.flawGrape) {
-            passes = Number(d.flawGrape) || 0;
-            totalPasses += passes;
-          }
-          if (Array.isArray(d.lessons)) {
-            d.lessons.forEach(l => {
-              if (l.turnout === false || l.missed === 1 || l.missed === '1') {
-                passes++;
-                totalPasses++;
-              }
-              const rList = l.grades || l.ratings || [];
-              if (Array.isArray(rList)) {
-                rList.forEach(r => {
-                  const g = parseGrade(r);
-                  if (g > 0) {
-                    discGrades.push(g);
-                    allGrades.push(g);
-                  }
-                });
-              }
-            });
-          }
         }
 
         if (!access) unadmittedCount++;
 
-        // Subject Average Grade
         const avgGrade = discGrades.length > 0
           ? (discGrades.reduce((a, b) => a + b, 0) / discGrades.length).toFixed(2)
           : (moduleScores.some(m => m.score > 0)
               ? (moduleScores.reduce((sum, m) => sum + m.score, 0) / moduleScores.length).toFixed(2)
               : null);
 
-        // Subject BARS Total
         const totalBars = moduleScores.reduce((sum, m) => sum + m.score, 0);
 
         return {
@@ -674,40 +845,42 @@ export const lkService = {
         };
       });
 
-      // 5. Passes fallback to studentInfo
       if (studentInfo && typeof studentInfo.passes === 'number' && (totalPasses === 0 || studentInfo.passes > totalPasses)) {
         totalPasses = studentInfo.passes;
       }
 
-      // 6. Overall GPA calculation
-      let overallGpa = '—';
-      if (allGrades.length > 0) {
-        overallGpa = (allGrades.reduce((a, b) => a + b, 0) / allGrades.length).toFixed(2);
-      } else if (allModuleScores.length > 0) {
-        overallGpa = (allModuleScores.reduce((a, b) => a + b, 0) / allModuleScores.length).toFixed(2);
-      } else if (studentInfo && studentInfo.reting) {
-        overallGpa = String(studentInfo.reting);
-      }
+      const overallGpa = allGrades.length > 0
+        ? (allGrades.reduce((a, b) => a + b, 0) / allGrades.length).toFixed(2)
+        : (allModuleScores.length > 0
+            ? (allModuleScores.reduce((a, b) => a + b, 0) / allModuleScores.length).toFixed(2)
+            : '—');
 
       const totalGradeDistribution = {};
       allGrades.forEach(g => {
         totalGradeDistribution[g] = (totalGradeDistribution[g] || 0) + 1;
       });
 
-      const result = {
+      const bachelorResult = {
         activeCourse,
         activeSemester,
         disciplines: enrichedDisciplines,
         gpa: overallGpa,
         passes: totalPasses,
+        missedLessons: [],
         totalGradesCount: allGrades.length,
         gradeDistribution: totalGradeDistribution,
         unadmittedCount,
         isAdmitted: unadmittedCount === 0,
+        isCollege: false,
         studentInfo
       };
-      cacheService.set('progress_with_lessons_latest', result);
-      return result;
+
+      try {
+        cacheService.set('progress_with_lessons_latest', bachelorResult);
+        cacheService.set(cacheKey, bachelorResult);
+      } catch (_) {}
+
+      return bachelorResult;
     });
   }
 };
