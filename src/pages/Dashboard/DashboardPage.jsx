@@ -386,7 +386,7 @@ export const DashboardPage = () => {
                 <Card key={lesson.id || idx} className="p-4 sm:p-5 hover:border-accent transition-colors overflow-hidden w-full min-w-0">
                   <div className="flex flex-wrap items-center justify-between gap-2 mb-2 w-full min-w-0">
                     <div className="px-2.5 py-1 rounded-lg bg-primary/10 text-primary font-bold text-xs sm:text-sm shrink-0">
-                      {formatLessonTime(lesson.start)} — {formatLessonTime(lesson.end)}
+                      {formatLessonTime(lesson) || "Пара"}
                     </div>
                     <div className="flex flex-wrap items-center justify-end gap-1.5 min-w-0 max-w-[60%] sm:max-w-none">
                       {lesson.type && (

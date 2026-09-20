@@ -65,15 +65,102 @@ export function isPastDate(d) {
 }
 
 /**
- * Format lesson time range (e.g. 09:00 - 10:30)
+ * Official MSAL (МГЮА) Bell Schedule
  */
-export function formatLessonTime(lesson) {
-  const start = lesson.start || lesson.timeStart || lesson.lesson_start || lesson.start_time;
-  const end = lesson.end || lesson.timeEnd || lesson.lesson_end || lesson.end_time;
-  if (!start) return '';
-  const cleanStart = start.slice(0, 5);
-  const cleanEnd = end ? end.slice(0, 5) : '';
-  return cleanEnd ? `${cleanStart} — ${cleanEnd}` : cleanStart;
+export const MSAL_BELL_SCHEDULE = {
+  1: { start: "09:00", end: "10:30" },
+  2: { start: "10:40", end: "12:10" },
+  3: { start: "12:40", end: "14:10" },
+  4: { start: "14:20", end: "15:50" },
+  5: { start: "16:20", end: "17:50" },
+  6: { start: "18:00", end: "19:30" },
+  7: { start: "19:40", end: "21:10" },
+  8: { start: "21:20", end: "22:50" }
+};
+
+function extractTimeStr(val) {
+  if (val === null || val === undefined) return "";
+  if (typeof val !== "string") val = String(val);
+  val = val.trim();
+  if (!val) return "";
+  if (val.includes("T")) {
+    const timePart = val.split("T")[1];
+    if (timePart) return timePart.slice(0, 5);
+  }
+  const match = val.match(/(\d{1,2}:\d{2})/);
+  if (match) {
+    return match[1].padStart(5, "0");
+  }
+  return val.slice(0, 5);
+}
+
+/**
+ * Robust format lesson time range (e.g. 09:00 — 10:30).
+ * Handles:
+ * - formatLessonTime(lesson)
+ * - formatLessonTime(lesson.start, lesson.end)
+ * - formatLessonTime("09:00:00")
+ * - fallback to pair number (1..8) with official MSAL timetable
+ */
+export function formatLessonTime(arg1, arg2) {
+  if (arg1 === null || arg1 === undefined) {
+    if (arg2) return extractTimeStr(arg2);
+    return "";
+  }
+
+  // If called with two arguments: formatLessonTime(start, end)
+  if (arg2 !== undefined) {
+    const s = extractTimeStr(arg1);
+    const e = extractTimeStr(arg2);
+    if (s && e) return `${s} — ${e}`;
+    if (s) return s;
+    if (e) return e;
+    return "";
+  }
+
+  // If called with a string
+  if (typeof arg1 === "string") {
+    if (arg1.includes("-") || arg1.includes("—")) {
+      const parts = arg1.split(/[-—]/).map(p => extractTimeStr(p)).filter(Boolean);
+      if (parts.length >= 2) return `${parts[0]} — ${parts[1]}`;
+      if (parts.length === 1) return parts[0];
+    }
+    return extractTimeStr(arg1);
+  }
+
+  // If called with an object: formatLessonTime(lesson)
+  if (typeof arg1 === "object") {
+    const lesson = arg1;
+    const rawStart = lesson.start || lesson.timeStart || lesson.lesson_start || lesson.start_time || lesson.begin || lesson.time_begin || lesson.from;
+    const rawEnd = lesson.end || lesson.timeEnd || lesson.lesson_end || lesson.end_time || lesson.finish || lesson.time_end || lesson.to;
+
+    const start = extractTimeStr(rawStart);
+    const end = extractTimeStr(rawEnd);
+
+    if (start && end) {
+      return `${start} — ${end}`;
+    }
+    if (start) {
+      return start;
+    }
+
+    // Check full string interval
+    const timeRange = lesson.time || lesson.interval || lesson.lessonTime;
+    if (timeRange && typeof timeRange === "string") {
+      return formatLessonTime(timeRange);
+    }
+
+    // Pair number fallback (1..8)
+    const pairNum = lesson.pair || lesson.num || lesson.number || lesson.lessonNumber || lesson.order;
+    if (pairNum && MSAL_BELL_SCHEDULE[pairNum]) {
+      return `${MSAL_BELL_SCHEDULE[pairNum].start} — ${MSAL_BELL_SCHEDULE[pairNum].end}`;
+    }
+    if (pairNum) {
+      return `${pairNum} пара`;
+    }
+  }
+
+  return "";
 }
 
 /**
