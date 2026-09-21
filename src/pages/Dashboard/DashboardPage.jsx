@@ -4,7 +4,6 @@ import * as Icons from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { lkService, formatISODate, formatLessonTime, getMondayOfWeek } from '../../api';
 import { cacheService } from '../../api';
-import { PullToRefresh } from '../../components/common/PullToRefresh';
 
 export const DashboardPage = () => {
   const { user, isCollege } = useAuth();
@@ -153,8 +152,7 @@ export const DashboardPage = () => {
   };
 
   return (
-    <PullToRefresh>
-      <div className="space-y-6 pb-12 animate-in fade-in duration-300">
+    <div className="space-y-6 pb-12 animate-in fade-in duration-300">
         {/* Profile Card & Avatar */}
         <div className="bg-surface dark:bg-[#1C2433] rounded-2xl p-5 border border-border/40 dark:border-[#283245]/60 shadow-sm flex items-center justify-between">
           <div className="space-y-1">
@@ -353,7 +351,14 @@ export const DashboardPage = () => {
 
         {/* Modal for College Missed Lessons */}
         {isCollege && showMissedModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+            onTouchStart={(e) => e.stopPropagation()}
+            onTouchMove={(e) => e.stopPropagation()}
+            onTouchEnd={(e) => e.stopPropagation()}
+          >
             <div className="bg-surface dark:bg-[#1C2433] rounded-2xl border border-border/60 dark:border-[#283245] w-full max-w-lg max-h-[80vh] flex flex-col shadow-2xl overflow-hidden">
               <div className="p-4 border-b border-border/40 dark:border-[#283245] flex items-center justify-between bg-slate-50/50 dark:bg-[#151B26]/50">
                 <div className="flex items-center gap-2 text-accent">
@@ -412,7 +417,6 @@ export const DashboardPage = () => {
             </div>
           </div>
         )}
-      </div>
-    </PullToRefresh>
+    </div>
   );
 };

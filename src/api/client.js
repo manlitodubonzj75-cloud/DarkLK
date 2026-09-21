@@ -1,7 +1,8 @@
 /**
  * MSAL+ API HTTP Client
- * Configured with proxy support, automatic token injection, error handling,
- * in-flight token refresh mutex, and integration with AES-GCM encrypted cryptoStorage.
+ * Configured with timeout protection (AbortController), browser fingerprint alignment,
+ * dynamic platform-aware X-Device-Model generation, in-flight token refresh mutex,
+ * and integration with AES-GCM encrypted cryptoStorage.
  */
 
 import { cryptoStorage } from './cryptoStorage.js';
@@ -19,14 +20,65 @@ const BASE_URL = isNativeEnv
   : (import.meta.env?.VITE_API_BASE_URL || '/api');
 
 /**
- * Standard browser-safe request headers
- * Note: Browser fetch rejects manual setting of User-Agent, Origin, and Referer.
+ * Detect client platform, OS and browser version to construct
+ * a legitimate X-Device-Model matching the university backend expectations.
+ */
+function getDeviceInfo() {
+  let os = 'GNU/Linux';
+  let clientName = 'Firefox';
+  let clientVersion = '135.0';
+  let deviceType = 'desktop';
+
+  if (typeof navigator !== 'undefined') {
+    const ua = navigator.userAgent || '';
+    const platform = navigator.platform || '';
+
+    // Device OS
+    if (/android/i.test(ua)) {
+      os = 'Android';
+      deviceType = 'mobile';
+    } else if (/iphone|ipad|ipod/i.test(ua)) {
+      os = 'iOS';
+      deviceType = 'mobile';
+    } else if (/win/i.test(platform) || /windows/i.test(ua)) {
+      os = 'Windows';
+    } else if (/mac/i.test(platform) || /macintosh/i.test(ua)) {
+      os = 'macOS';
+    } else if (/linux/i.test(platform) || /linux/i.test(ua)) {
+      os = 'GNU/Linux';
+    }
+
+    // Client Name & Version
+    const ffMatch = ua.match(/Firefox\/(\d+[\.\d]*)/);
+    const chromeMatch = ua.match(/(?:Chrome|Chromium)\/(\d+[\.\d]*)/);
+    const safariMatch = ua.match(/Version\/(\d+[\.\d]*).*Safari/);
+
+    if (ffMatch) {
+      clientName = 'Firefox';
+      clientVersion = ffMatch[1];
+    } else if (chromeMatch) {
+      clientName = 'Chrome';
+      clientVersion = chromeMatch[1];
+    } else if (safariMatch) {
+      clientName = 'Safari';
+      clientVersion = safariMatch[1];
+    }
+  }
+
+  return { os, clientName, clientVersion, deviceType };
+}
+
+/**
+ * Standard browser headers matching the exact format expected by lk.msal.ru:3443
  */
 function getStandardHeaders(token = null) {
+  const { os, clientName, clientVersion, deviceType } = getDeviceInfo();
+  const deviceModel = `ClientType: browser, ClientName: ${clientName}, ClientVersion: ${clientVersion}, DeviceOS: ${os}, DeviceType: ${deviceType}`;
+
   const headers = {
     'Accept': 'application/json, text/plain, */*',
     'Content-Type': 'application/json',
-    'X-Device-Model': 'ClientType: browser, DeviceType: web'
+    'X-Device-Model': deviceModel
   };
 
   const activeToken = token || cryptoStorage.getToken() || localStorage.getItem('access_token');
@@ -35,6 +87,35 @@ function getStandardHeaders(token = null) {
   }
 
   return headers;
+}
+
+/**
+ * Wrapper around fetch with timeout via AbortController to prevent infinite hanging
+ */
+async function fetchWithTimeout(url, options = {}, timeoutMs = 6500) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  const signal = options.signal
+    ? (typeof AbortSignal.any === 'function'
+        ? AbortSignal.any([options.signal, controller.signal])
+        : controller.signal)
+    : controller.signal;
+
+  try {
+    const response = await fetch(url, { ...options, signal });
+    return response;
+  } catch (err) {
+    if (err.name === 'AbortError' || controller.signal.aborted) {
+      const timeoutError = new Error(`Request timed out after ${timeoutMs}ms: ${url}`);
+      timeoutError.name = 'TimeoutError';
+      timeoutError.status = 408;
+      throw timeoutError;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 let refreshPromise = null;
@@ -52,14 +133,14 @@ export async function tryRefreshToken() {
       const refreshToken = cryptoStorage.getRefreshToken() || localStorage.getItem('refresh_token');
       if (refreshToken) {
         try {
-          const response = await fetch(`${BASE_URL}/auth/refresh`, {
+          const response = await fetchWithTimeout(`${BASE_URL}/auth/refresh`, {
             method: 'POST',
             headers: {
               'Accept': 'application/json',
               'Content-Type': 'application/json'
             },
             body: JSON.stringify({ refresh_token: refreshToken })
-          });
+          }, 5000);
 
           if (response.ok) {
             const data = await response.json();
@@ -80,14 +161,11 @@ export async function tryRefreshToken() {
       const { login: savedLogin, password: savedPassword } = cryptoStorage.getSavedCredentials();
       if (savedLogin && savedPassword) {
         try {
-          const response = await fetch(`${BASE_URL}/auth`, {
+          const response = await fetchWithTimeout(`${BASE_URL}/auth`, {
             method: 'POST',
-            headers: {
-              'Accept': 'application/json',
-              'Content-Type': 'application/json'
-            },
+            headers: getStandardHeaders(),
             body: JSON.stringify({ username: savedLogin, password: savedPassword })
-          });
+          }, 5000);
 
           if (response.ok) {
             const data = await response.json();
@@ -107,7 +185,6 @@ export async function tryRefreshToken() {
             return false;
           }
         } catch (err) {
-          // Network failure while attempting re-login must NOT boot the student to the login page
           console.warn('[Auth Client] Silent re-login network failure:', err.message);
           return false;
         }
@@ -123,11 +200,13 @@ export async function tryRefreshToken() {
 }
 
 /**
- * Core HTTP request handler
+ * Core HTTP request handler with timeout protection
  */
 export async function apiClient(endpoint, options = {}) {
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const url = `${BASE_URL}${cleanEndpoint}`;
+  const timeoutMs = options.timeout || 6500;
+
   const headers = {
     ...getStandardHeaders(options.token),
     ...(options.headers || {})
@@ -139,18 +218,16 @@ export async function apiClient(endpoint, options = {}) {
   };
 
   try {
-    const response = await fetch(url, config);
+    const response = await fetchWithTimeout(url, config, timeoutMs);
 
     // 401 Unauthorized - token expired or invalid
     if (response.status === 401) {
-      // Try refresh token if available and not already attempting auth endpoint
       if (!endpoint.includes('/auth')) {
         const refreshed = await tryRefreshToken();
         if (refreshed) {
-          // Retry original request once with new encrypted token
           const newToken = cryptoStorage.getToken() || localStorage.getItem('access_token');
           headers['Authorization'] = `Bearer ${newToken}`;
-          const retryResponse = await fetch(url, { ...config, headers });
+          const retryResponse = await fetchWithTimeout(url, { ...config, headers }, timeoutMs);
           if (retryResponse.ok) {
             if (retryResponse.status === 204) return null;
             return await retryResponse.json();

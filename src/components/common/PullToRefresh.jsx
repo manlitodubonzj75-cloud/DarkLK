@@ -3,7 +3,8 @@ import { Icons } from './Icons';
 
 /**
  * Universal native-feeling Pull-to-Refresh container:
- * - Engages when swiping down from top of screen
+ * - Engages ONLY when swiping down from top of main scrollable page
+ * - Strictly ignores touches inside modals, dialogs, and popups
  * - Tactile spring resistance and rotation indicator
  * - Dispatches 'app-pull-to-refresh' event and executes callback
  */
@@ -18,8 +19,26 @@ export const PullToRefresh = ({ children, onRefresh }) => {
   const TRIGGER_THRESHOLD = 65; // px to trigger refresh
   const MAX_PULL = 90;
 
+  const isInsideModal = (target) => {
+    if (!target) return false;
+    return Boolean(
+      target.closest('[role="dialog"]') ||
+      target.closest('[aria-modal="true"]') ||
+      target.closest('.fixed') ||
+      target.closest('.modal-container') ||
+      target.closest('[data-modal]')
+    );
+  };
+
   const handleTouchStart = (e) => {
     if (isRefreshing) return;
+
+    // Never activate pull-to-refresh when touching inside a modal, dialog or drawer
+    if (isInsideModal(e.target)) {
+      isDragging.current = false;
+      return;
+    }
+
     const scrollElem = containerRef.current;
     // Only activate if we are scrolled to the very top
     if (scrollElem && scrollElem.scrollTop > 2) return;
@@ -32,6 +51,14 @@ export const PullToRefresh = ({ children, onRefresh }) => {
 
   const handleTouchMove = (e) => {
     if (!isDragging.current || isRefreshing) return;
+
+    // Abort if finger dragged into or out of a modal
+    if (isInsideModal(e.target)) {
+      isDragging.current = false;
+      setPullDistance(0);
+      return;
+    }
+
     const scrollElem = containerRef.current;
     if (scrollElem && scrollElem.scrollTop > 2) {
       isDragging.current = false;
@@ -46,10 +73,6 @@ export const PullToRefresh = ({ children, onRefresh }) => {
       // Damped pull curve
       const distance = Math.min(diff * 0.45, MAX_PULL);
       setPullDistance(distance);
-      // Prevent default browser bounce if supported
-      if (diff > 10 && e.cancelable) {
-        // Allow passive handling where possible
-      }
     } else {
       setPullDistance(0);
     }
@@ -109,7 +132,7 @@ export const PullToRefresh = ({ children, onRefresh }) => {
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       className="relative w-full h-full overflow-y-auto overflow-x-hidden flex-1"
-      style={{ WebkitOverflowScrolling: 'touch' }}
+      style={{ WebkitOverflowScrolling: 'touch', overscrollBehaviorY: 'contain' }}
     >
       {/* Pull Indicator Badge */}
       <div

@@ -4,33 +4,22 @@ import { cryptoStorage } from './cryptoStorage.js';
 export const authService = {
   /**
    * User login: POST /auth
-   * Stores access tokens and securely saves encrypted credentials in AES-GCM vault
+   * Stores access tokens and securely saves encrypted credentials in AES-GCM vault.
+   * Note: The response payload already contains full student data (role, speciality, group, etc).
    */
   async login(username, password) {
     const data = await apiClient('/auth', {
       method: 'POST',
-      body: JSON.stringify({ username, password })
+      body: JSON.stringify({ username, password }),
+      timeout: 8000
     });
 
     if (data && data.access_token) {
       cryptoStorage.setTokens(data.access_token, data.refresh_token || null);
       cryptoStorage.setSavedCredentials(username, password);
 
-      // Cache user from POST /auth response right away (contains full profile for College & Bachelor)
+      // Cache user from POST /auth response right away
       this.cacheUser(data);
-
-      // Verify and fetch complete user profile
-      try {
-        const userProfile = await this.checkSession(data.access_token);
-        if (userProfile) {
-          const merged = { ...data, ...userProfile };
-          this.cacheUser(merged);
-          return { ...data, user: merged };
-        }
-      } catch (e) {
-        console.warn('Fetched token but checkSession failed, using token response data:', e);
-      }
-
       return { ...data, user: data };
     }
 
@@ -38,10 +27,10 @@ export const authService = {
   },
 
   /**
-   * Check session / get user profile: GET /auth
+   * Check session / get user profile: GET /auth with 5s timeout
    */
   async checkSession(token = null) {
-    return apiClient('/auth', { method: 'GET', token });
+    return apiClient('/auth', { method: 'GET', token, timeout: 5000 });
   },
 
   /**
@@ -50,7 +39,8 @@ export const authService = {
   async refreshToken(refreshToken) {
     const data = await apiClient('/auth/refresh', {
       method: 'POST',
-      body: JSON.stringify({ refresh_token: refreshToken })
+      body: JSON.stringify({ refresh_token: refreshToken }),
+      timeout: 5000
     });
 
     if (data && data.access_token) {
@@ -66,7 +56,7 @@ export const authService = {
    */
   async logout() {
     try {
-      await apiClient('/auth/logout', { method: 'POST' });
+      await apiClient('/auth/logout', { method: 'POST', timeout: 3000 });
     } catch (e) {
       console.warn('Logout request warning:', e.message);
     } finally {
@@ -105,22 +95,24 @@ export const authService = {
       return null;
     }
 
-    // 1. If we have a token, attempt to validate with current session
+    const isDeviceOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
+
+    // 1. If we have a token, attempt to validate with current session with 5s timeout
     if (token) {
       try {
         const user = await this.checkSession(token);
         if (user) {
           const merged = { ...(offlineUser || {}), ...user };
           this.cacheUser(merged);
-          return { user: merged, token };
+          return { user: merged, token, isOffline: false };
         }
       } catch (err) {
-        // If error is NOT 401 (e.g. server is down, 502/504, timeout, or user is offline):
-        // Keep the user in the app with cached profile!
+        // If error is NOT 401 (e.g. server delay, 502/504, timeout, or local proxy):
+        // Keep the user in the app with cached profile seamlessly without disturbing banner
         if (err.status !== 401 && err.message !== 'UNAUTHORIZED') {
-          console.warn('[AuthService] Server unreachable during session restore, using cached offline session:', err.message);
+          console.warn('[AuthService] Server check skipped during session restore, using cached profile:', err.message);
           if (offlineUser) {
-            return { user: offlineUser, token, isOffline: true };
+            return { user: offlineUser, token, isOffline: isDeviceOffline };
           }
         }
         console.warn('[AuthService] Token expired (401), attempting background re-authentication...');
@@ -136,20 +128,19 @@ export const authService = {
           const user = await this.checkSession(newToken).catch(() => offlineUser);
           const finalUser = user || offlineUser || { username: savedLogin, name: savedLogin };
           this.cacheUser(finalUser);
-          return { user: finalUser, token: newToken };
+          return { user: finalUser, token: newToken, isOffline: false };
         }
       } catch (err) {
-        // Network failure during re-login must NOT log out an existing user
         if (err.status !== 401 && err.status !== 403 && offlineUser) {
           console.warn('[AuthService] Network error during re-login, falling back to offline session');
-          return { user: offlineUser, token: token || 'offline', isOffline: true };
+          return { user: offlineUser, token: token || 'offline', isOffline: isDeviceOffline };
         }
       }
     }
 
     // 3. Fallback: keep user logged in with offline profile if available
     if (offlineUser) {
-      return { user: offlineUser, token: token || 'offline', isOffline: true };
+      return { user: offlineUser, token: token || 'offline', isOffline: isDeviceOffline };
     }
 
     return null;

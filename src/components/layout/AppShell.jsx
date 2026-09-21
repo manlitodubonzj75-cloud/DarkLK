@@ -9,10 +9,11 @@ import { useDeviceAdaptive } from "../../hooks/useDeviceAdaptive";
 import { PullToRefresh } from "../common/PullToRefresh";
 
 export const AppShell = () => {
-  const { user, logout, isCollege } = useAuth();
+  const { user, logout, isCollege, isOffline, isSyncing, lastSyncTime, retrySync } = useAuth();
   const { isDark, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const [legalModalTab, setLegalModalTab] = React.useState(null);
+  const [isRefreshing, setIsRefreshing] = React.useState(false);
   const device = useDeviceAdaptive();
 
   const ALL_NAV_ITEMS = [
@@ -39,6 +40,37 @@ export const AppShell = () => {
   const photoUrl = (typeof user?.photo === 'string' && user.photo.trim())
     ? (user.photo.startsWith('http') ? user.photo : `https://lk.msal.ru:3443/${user.photo}`)
     : null;
+
+  const formatSyncTime = (timestamp) => {
+    if (!timestamp) return 'недавно';
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMin = Math.round((now.getTime() - date.getTime()) / 60000);
+
+    if (diffMin < 1) return 'только что';
+    if (diffMin < 60) return `${diffMin} мин. назад`;
+
+    return date.toLocaleDateString('ru-RU', {
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const handleManualRefresh = async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    window.dispatchEvent(new CustomEvent('app-pull-to-refresh'));
+    if (retrySync) {
+      try {
+        await retrySync();
+      } catch (_) {}
+    }
+    setTimeout(() => {
+      setIsRefreshing(false);
+    }, 850);
+  };
 
   return (
     <div className="flex h-screen w-full bg-bg dark:bg-[#12151B] text-dark dark:text-white font-sans overflow-hidden transition-colors duration-200">
@@ -101,6 +133,19 @@ export const AppShell = () => {
           ))}
         </nav>
 
+        {/* Desktop Quick Refresh Button */}
+        <div className="px-3 py-2 border-t border-white/5 dark:border-[#1E2330]">
+          <button
+            onClick={handleManualRefresh}
+            disabled={isRefreshing}
+            className="w-full flex items-center justify-center space-x-2.5 px-3.5 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 dark:bg-[#1E2430] dark:hover:bg-[#272F3F] text-white/90 text-xs font-semibold transition-all active:scale-95 border border-white/10 dark:border-[#283245] shadow-sm disabled:opacity-50"
+            title="Обновить данные расписания и оценок с сервера"
+          >
+            <Icons.Refresh size={16} className={`shrink-0 ${isRefreshing ? 'animate-spin text-accent dark:text-[#38BDF8]' : ''}`} />
+            <span>{isRefreshing ? 'Обновление данных...' : 'Обновить данные'}</span>
+          </button>
+        </div>
+
         {/* Legal & version sub-bar */}
         <div className="px-4 py-2 border-t border-white/5 dark:border-[#1E2330] flex items-center justify-between text-[10px] text-white/50 dark:text-[#8E98A8]">
           <div className="flex items-center space-x-2">
@@ -118,7 +163,7 @@ export const AppShell = () => {
               Конфиденциальность
             </button>
           </div>
-          <span className="font-mono">v1.0</span>
+          <span className="font-mono font-semibold text-accent dark:text-[#38BDF8]">v2.0.1</span>
         </div>
 
         {/* Sidebar Footer Controls */}
@@ -189,7 +234,28 @@ export const AppShell = () => {
           </div>
         </header>
 
-        {/* Scrollable Page Body with Pull-to-Refresh & Device Adaptation */}
+        {/* Global Offline / Cached Data Banner */}
+        {isOffline && (
+          <div className="bg-amber-500/15 dark:bg-amber-500/20 border-b border-amber-500/30 text-amber-800 dark:text-amber-200 px-4 py-2 flex items-center justify-between text-xs transition-all shrink-0 z-10">
+            <div className="flex items-center space-x-2 min-w-0">
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse shrink-0" />
+              <span className="font-medium truncate">
+                Автономный режим • Данные из кэша (актуально на: {formatSyncTime(lastSyncTime)})
+              </span>
+            </div>
+            <button
+              onClick={retrySync}
+              disabled={isSyncing}
+              className="ml-3 shrink-0 inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 active:scale-95 text-amber-900 dark:text-amber-100 font-semibold transition-all disabled:opacity-50"
+              title="Повторить попытку подключения к серверу"
+            >
+              <Icons.Refresh size={12} className={isSyncing ? "animate-spin" : ""} />
+              <span>{isSyncing ? "Синхронизация..." : "Обновить"}</span>
+            </button>
+          </div>
+        )}
+
+        {/* Scrollable Page Body with Single Root Pull-to-Refresh */}
         <main className="flex-1 overflow-hidden bg-bg dark:bg-[#12151B] w-full min-w-0 flex flex-col">
           <PullToRefresh>
             <div className="p-3 sm:p-5 md:p-8 max-w-5xl mx-auto pb-24 md:pb-8 w-full min-w-0">
@@ -198,33 +264,32 @@ export const AppShell = () => {
           </PullToRefresh>
         </main>
 
-        {/* MOBILE BOTTOM NAVIGATION */}
-        <nav className="md:hidden flex items-center justify-around bg-card dark:bg-[#12151B] border-t border-border dark:border-[#212634] py-2 px-1 z-20 pb-[max(0.6rem,env(safe-area-inset-bottom))] shrink-0 shadow-lg">
+        {/* MOBILE BOTTOM NAVIGATION BAR */}
+        <nav className="md:hidden flex items-center justify-around bg-card dark:bg-[#1F2430] border-t border-border dark:border-[#212634] px-2 py-2 z-10 shrink-0 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
           {NAV_ITEMS.map(item => (
             <NavLink
               key={item.to}
               to={item.to}
               end={item.to === '/'}
               className={({ isActive }) =>
-                `flex flex-col items-center py-1 px-3 rounded-2xl transition-all ${
+                `flex flex-col items-center py-1 px-3 rounded-xl transition-all ${
                   isActive
-                    ? 'text-primary dark:text-[#38BDF8] font-bold dark:bg-[#1E6685]/30'
+                    ? 'text-primary dark:text-[#38BDF8] font-bold scale-105'
                     : 'text-textMuted dark:text-[#8E98A8] hover:text-dark dark:hover:text-white'
                 }`
               }
             >
-              <item.icon size={20} />
-              <span className="text-[10px] mt-0.5">{item.label}</span>
+              <item.icon size={22} />
+              <span className="text-[10px] mt-1 tracking-tight">{item.label}</span>
             </NavLink>
           ))}
         </nav>
       </div>
 
-      {/* Legal Information Modal */}
       <LegalModal
-        isOpen={!!legalModalTab}
-        onClose={() => setLegalModalTab(null)}
+        isOpen={Boolean(legalModalTab)}
         initialTab={legalModalTab || 'terms'}
+        onClose={() => setLegalModalTab(null)}
       />
     </div>
   );

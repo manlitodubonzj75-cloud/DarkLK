@@ -130,6 +130,12 @@ export const RecordbookPage = () => {
 
   useEffect(() => {
     loadRecordbookData();
+
+    const handlePull = () => {
+      loadRecordbookData();
+    };
+    window.addEventListener("app-pull-to-refresh", handlePull);
+    return () => window.removeEventListener("app-pull-to-refresh", handlePull);
   }, []);
 
   return (

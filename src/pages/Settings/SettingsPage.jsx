@@ -135,10 +135,10 @@ export const SettingsPage = () => {
           <img
             src={photoUrl}
             alt="Profile"
-            className="w-20 h-20 rounded-2xl object-cover border-2 border-accent shrink-0 shadow-sm"
+            className="w-20 h-20 rounded-full object-cover border-2 border-accent shrink-0 shadow-sm"
           />
         ) : (
-          <div className="w-20 h-20 rounded-2xl bg-primary text-white flex items-center justify-center font-black text-2xl shrink-0 shadow-sm">
+          <div className="w-20 h-20 rounded-full bg-primary text-white flex items-center justify-center font-black text-2xl shrink-0 shadow-sm">
             {getInitials(user?.name)}
           </div>
         )}
@@ -159,11 +159,7 @@ export const SettingsPage = () => {
                 {user.course} курс
               </span>
             )}
-            {user?.subrole && (
-              <span className="px-3 py-1 bg-accent/10 text-accent rounded-lg text-xs font-bold">
-                {user.subrole}
-              </span>
-            )}
+
           </div>
         </div>
       </Card>
@@ -261,7 +257,7 @@ export const SettingsPage = () => {
               <p className="text-xs text-textMuted dark:text-[#8E98A8]">для Альма Матер с любовью.</p>
               <div className="flex items-center space-x-2 mt-1">
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-bg dark:bg-[#12151B] border border-border dark:border-[#2B3242] text-textMuted dark:text-[#8E98A8]">
-                  Версия 2.0.0
+                  Версия 2.0.1
                 </span>
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                   AES-256 (152-ФЗ)
@@ -299,6 +295,13 @@ export const SettingsPage = () => {
         <Icons.LogOut size={18} />
         <span>Выйти из аккаунта</span>
       </button>
+
+      {/* Version info */}
+      <div className="text-center pt-2 pb-2">
+        <p className="text-xs font-mono text-textMuted dark:text-[#8E98A8]">
+          DarkMSAL v2.0.1
+        </p>
+      </div>
 
       {/* Legal Information Modal */}
       <LegalModal

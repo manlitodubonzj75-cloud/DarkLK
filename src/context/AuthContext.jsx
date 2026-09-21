@@ -8,6 +8,12 @@ export const AuthProvider = ({ children }) => {
   const [token, setToken] = useState(() => cryptoStorage.getToken() || localStorage.getItem('access_token'));
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [isOffline, setIsOffline] = useState(() => typeof navigator !== 'undefined' ? !navigator.onLine : false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState(() => {
+    const saved = localStorage.getItem('msal_last_sync');
+    return saved ? Number(saved) : null;
+  });
 
   const logout = useCallback(async () => {
     setIsLoading(true);
@@ -17,9 +23,38 @@ export const AuthProvider = ({ children }) => {
       setUser(null);
       setToken(null);
       setError(null);
+      setIsOffline(false);
       setIsLoading(false);
     }
   }, []);
+
+  const retrySync = useCallback(async () => {
+    if (isSyncing) return;
+    setIsSyncing(true);
+    try {
+      const freshUser = await authService.checkSession();
+      if (freshUser) {
+        setUser(freshUser);
+        authService.cacheUser(freshUser);
+        setIsOffline(false);
+        const now = Date.now();
+        setLastSyncTime(now);
+        try {
+          localStorage.setItem('msal_last_sync', String(now));
+        } catch (_) {}
+      }
+    } catch (err) {
+      console.warn('[AuthContext] Manual sync attempt failed:', err.message);
+      // Only flip to offline mode if connection truly failed or device is offline
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        setIsOffline(true);
+      } else if (err.name === 'TimeoutError' || err.status === 408 || err.message?.includes('Failed to fetch')) {
+        setIsOffline(true);
+      }
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [isSyncing]);
 
   // Restore session on initial load
   useEffect(() => {
@@ -33,12 +68,21 @@ export const AuthProvider = ({ children }) => {
           if (session && session.user) {
             setUser(session.user);
             setToken(session.token);
+            setIsOffline(Boolean(session.isOffline));
+            if (!session.isOffline) {
+              const now = Date.now();
+              setLastSyncTime(now);
+              try {
+                localStorage.setItem('msal_last_sync', String(now));
+              } catch (_) {}
+            }
           } else {
             // Only clear state if there is truly no cached user or credentials
             const fallbackUser = authService.getCachedUser();
             if (fallbackUser) {
               setUser(fallbackUser);
               setToken(cryptoStorage.getToken() || 'offline');
+              setIsOffline(typeof navigator !== 'undefined' ? !navigator.onLine : false);
             } else {
               setUser(null);
               setToken(null);
@@ -52,6 +96,7 @@ export const AuthProvider = ({ children }) => {
           if (fallbackUser) {
             setUser(fallbackUser);
             setToken(cryptoStorage.getToken() || 'offline');
+            setIsOffline(typeof navigator !== 'undefined' ? !navigator.onLine : false);
           } else {
             setUser(null);
             setToken(null);
@@ -66,9 +111,15 @@ export const AuthProvider = ({ children }) => {
 
     initAuth();
 
-    // Listen to background token renewals and authoritative session expirations
+    // Standard native online/offline listeners
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
     const handleTokenRefreshed = (e) => {
-      if (e.detail) {
+      if (e.detail && isMounted) {
         setToken(e.detail);
       }
     };
@@ -82,6 +133,8 @@ export const AuthProvider = ({ children }) => {
 
     return () => {
       isMounted = false;
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
       window.removeEventListener('session-token-refreshed', handleTokenRefreshed);
       window.removeEventListener('auth-session-expired', handleSessionExpired);
     };
@@ -100,6 +153,12 @@ export const AuthProvider = ({ children }) => {
           role: 'student'
         };
         setUser(currentUser);
+        setIsOffline(false);
+        const now = Date.now();
+        setLastSyncTime(now);
+        try {
+          localStorage.setItem('msal_last_sync', String(now));
+        } catch (_) {}
         return { success: true, user: currentUser };
       }
       throw new Error('Не удалось получить токен доступа');
@@ -120,9 +179,18 @@ export const AuthProvider = ({ children }) => {
       if (latestUser) {
         setUser(latestUser);
         authService.cacheUser(latestUser);
+        setIsOffline(false);
+        const now = Date.now();
+        setLastSyncTime(now);
+        try {
+          localStorage.setItem('msal_last_sync', String(now));
+        } catch (_) {}
       }
     } catch (e) {
       console.warn('Failed to refresh user profile:', e);
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        setIsOffline(true);
+      }
     }
   }, []);
 
@@ -134,6 +202,10 @@ export const AuthProvider = ({ children }) => {
     isCollege,
     isAuthenticated: Boolean(token && user),
     isLoading,
+    isOffline,
+    isSyncing,
+    lastSyncTime,
+    retrySync,
     error,
     login,
     logout,
