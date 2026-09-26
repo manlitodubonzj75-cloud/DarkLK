@@ -38,11 +38,14 @@ const header = `// ==UserScript==
 // @version      ${version}
 // @description  Тёмный современный интерфейс для личного кабинета студента МГЮА (lk.msal.ru)
 // @author       DarkMSAL Team
-// @match        https://lk.msal.ru/*
-// @match        https://lk.msal.ru:3443/*
-// @match        http://lk.msal.ru/*
-// @match        https://*.msal.ru/*
-// @run-at       document-start
+// @match        *://lk.msal.ru/*
+// @match        *://*.msal.ru/*
+// @include      *://lk.msal.ru*
+// @include      *://*.msal.ru*
+// @include      https://lk.msal.ru*
+// @include      http://lk.msal.ru*
+// @run-at       document-end
+// @noframes
 // @grant        GM_addStyle
 // @grant        GM_setValue
 // @grant        GM_getValue

@@ -12,7 +12,40 @@ function initDarkMSAL() {
   if (typeof document === 'undefined') return;
   if (document.getElementById('darkmsal-root')) return;
 
+  // Ensure document.body exists
+  if (!document.body) {
+    setTimeout(initDarkMSAL, 50);
+    return;
+  }
+
   const isEnabled = localStorage.getItem('darkmsal_active') !== 'false';
+
+  // Inject iOS Safari touch and click delegation CSS fixes
+  const iosFixStyle = document.createElement('style');
+  iosFixStyle.id = 'darkmsal-ios-touch-fix';
+  iosFixStyle.textContent = `
+    #darkmsal-root {
+      -webkit-overflow-scrolling: touch;
+      touch-action: pan-y;
+      cursor: pointer;
+    }
+    #darkmsal-root * {
+      -webkit-tap-highlight-color: transparent;
+    }
+    #darkmsal-root button,
+    #darkmsal-root [role="button"],
+    #darkmsal-root a,
+    #darkmsal-root select,
+    #darkmsal-floating-toggle {
+      cursor: pointer !important;
+      touch-action: manipulation !important;
+    }
+    #darkmsal-root input,
+    #darkmsal-root textarea {
+      cursor: text !important;
+    }
+  `;
+  document.head.appendChild(iosFixStyle);
 
   // Main container overlay
   const rootContainer = document.createElement('div');
@@ -27,6 +60,8 @@ function initDarkMSAL() {
   rootContainer.style.overflowX = 'hidden';
   rootContainer.style.display = isEnabled ? 'block' : 'none';
   rootContainer.style.backgroundColor = '#0b0f19';
+  rootContainer.style.cursor = 'pointer';
+  rootContainer.style.webkitTapHighlightColor = 'transparent';
 
   // Floating button to return to DarkMSAL from legacy university LK
   const floatingBtn = document.createElement('button');
@@ -50,19 +85,20 @@ function initDarkMSAL() {
   floatingBtn.style.alignItems = 'center';
   floatingBtn.style.gap = '6px';
   floatingBtn.style.transition = 'all 0.2s ease-in-out';
+  floatingBtn.style.touchAction = 'manipulation';
+  floatingBtn.style.webkitTapHighlightColor = 'transparent';
 
-  floatingBtn.onmouseover = () => {
-    floatingBtn.style.transform = 'scale(1.05)';
-  };
-  floatingBtn.onmouseout = () => {
-    floatingBtn.style.transform = 'scale(1)';
-  };
-
-  floatingBtn.onclick = () => {
+  const handleToggle = (e) => {
+    if (e && e.type === 'touchend') {
+      e.preventDefault();
+    }
     rootContainer.style.display = 'block';
     floatingBtn.style.display = 'none';
     localStorage.setItem('darkmsal_active', 'true');
   };
+
+  floatingBtn.addEventListener('click', handleToggle);
+  floatingBtn.addEventListener('touchend', handleToggle, { passive: false });
 
   window.addEventListener('darkmsal-minimize', () => {
     rootContainer.style.display = 'none';
@@ -70,9 +106,8 @@ function initDarkMSAL() {
     localStorage.setItem('darkmsal_active', 'false');
   });
 
-  const parent = document.body || document.documentElement;
-  parent.appendChild(rootContainer);
-  parent.appendChild(floatingBtn);
+  document.body.appendChild(rootContainer);
+  document.body.appendChild(floatingBtn);
 
   ReactDOM.createRoot(rootContainer).render(
     <React.StrictMode>
@@ -81,8 +116,17 @@ function initDarkMSAL() {
   );
 }
 
+// Ensure execution when DOM is completely ready
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', initDarkMSAL);
 } else {
+  // DOM already loaded
   initDarkMSAL();
 }
+
+// Fallback in case document.body was replaced or loaded late
+window.addEventListener('load', () => {
+  if (!document.getElementById('darkmsal-root')) {
+    initDarkMSAL();
+  }
+});
