@@ -7,7 +7,6 @@ import { Logo } from '../common/Logo';
 import { LegalModal } from '../common/LegalModal';
 import { UpdateModal } from '../common/UpdateModal';
 import { updateService } from '../../api/updateService';
-import { useDeviceAdaptive } from "../../hooks/useDeviceAdaptive";
 import { PullToRefresh } from "../common/PullToRefresh";
 
 export const AppShell = () => {
@@ -21,7 +20,6 @@ export const AppShell = () => {
   const [showLegalGate, setShowLegalGate] = React.useState(() => {
     return !Boolean(localStorage.getItem("msal_legal_accepted_v1"));
   });
-  const device = useDeviceAdaptive();
 
   const ALL_NAV_ITEMS = [
     { to: '/', label: 'Главная', icon: Icons.Home },
@@ -104,7 +102,7 @@ export const AppShell = () => {
   };
 
   return (
-    <div className="flex h-screen w-full bg-bg dark:bg-[#12151B] text-dark dark:text-white font-sans overflow-hidden transition-colors duration-200">
+    <div className="flex h-full h-[100dvh] w-full bg-bg dark:bg-[#12151B] text-dark dark:text-white font-sans overflow-hidden transition-colors duration-200">
       {/* DESKTOP SIDEBAR */}
       <aside className="hidden md:flex flex-col w-64 h-full bg-primary dark:bg-[#12151B] text-white border-r border-white/10 dark:border-[#212634] shadow-xl z-20 shrink-0">
         {/* Logo */}
@@ -119,53 +117,54 @@ export const AppShell = () => {
         {/* User Profile Card */}
         <div
           onClick={() => navigate('/settings')}
-          className="p-3 mx-3 my-4 rounded-2xl bg-white/10 dark:bg-[#1F2430] hover:bg-white/15 dark:hover:bg-[#262D3D] active:scale-[0.98] flex items-center space-x-3 cursor-pointer transition-all border border-white/10 dark:border-[#2B3242] group shadow-sm"
+          className="p-4 mx-3 my-4 rounded-2xl bg-white/10 dark:bg-[#1F2430] border border-white/10 dark:border-[#283245] flex items-center space-x-3 cursor-pointer hover:bg-white/15 dark:hover:bg-[#257C9F] transition-all group"
           title="Открыть профиль и настройки"
         >
           {photoUrl ? (
             <img
               src={photoUrl}
               alt="Avatar"
-              className="w-10 h-10 rounded-full object-cover border-2 border-accent dark:border-[#22869A] shrink-0 group-hover:scale-105 transition-transform"
+              className="w-12 h-12 rounded-full object-cover border-2 border-white/20 dark:border-[#22869A] shrink-0 group-hover:scale-105 transition-transform"
             />
           ) : (
-            <div className="w-10 h-10 rounded-full bg-accent dark:bg-[#22869A] flex items-center justify-center font-bold text-white text-sm shrink-0 group-hover:scale-105 transition-transform">
+            <div className="w-12 h-12 rounded-full bg-accent dark:bg-[#22869A] flex items-center justify-center font-bold text-base text-white shadow-inner shrink-0 group-hover:scale-105 transition-transform">
               {getInitials(user?.name)}
             </div>
           )}
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-bold truncate text-white">
+          <div className="min-w-0 flex-1">
+            <h3 className="text-sm font-bold text-white truncate group-hover:text-accent dark:group-hover:text-white transition-colors">
               {user?.name || 'Студент'}
-            </p>
-            <p className="text-xs text-white/70 dark:text-[#8E98A8] truncate">
-              {user?.group || user?.role || 'Студент'}
+            </h3>
+            <p className="text-xs text-white/70 dark:text-[#8E98A8] truncate mt-0.5">
+              {user?.group || 'Группа не указана'}
             </p>
           </div>
+          <Icons.ChevronRight size={16} className="text-white/40 group-hover:text-white group-hover:translate-x-0.5 transition-all shrink-0" />
         </div>
 
-        {/* Navigation list */}
-        <nav className="flex-1 px-3 space-y-1.5 overflow-y-auto">
-          {NAV_ITEMS.map(item => (
+        {/* Navigation Links */}
+        <nav className="flex-1 px-3 space-y-1.5 overflow-y-auto no-scrollbar">
+          {NAV_ITEMS.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
               end={item.to === '/'}
               className={({ isActive }) =>
-                `flex items-center space-x-3 px-4 py-3 rounded-2xl font-semibold text-sm transition-all duration-150 ${
+                `flex items-center space-x-3 px-3.5 py-3 rounded-xl text-sm font-semibold transition-all ${
                   isActive
-                    ? 'bg-card text-primary dark:bg-[#1E6685] dark:text-white shadow-sm font-bold'
-                    : 'text-white/80 dark:text-[#8E98A8] hover:bg-white/10 dark:hover:bg-[#1F2430] dark:hover:text-white'
+                    ? 'bg-white/20 dark:bg-[#1E6685] text-white shadow-md'
+                    : 'text-white/80 dark:text-[#8E98A8] hover:bg-white/10 dark:hover:bg-[#1E2430] hover:text-white'
                 }`
               }
             >
               <item.icon size={20} className="shrink-0" />
-              <span>{item.label}</span>
+              <span className="truncate">{item.label}</span>
             </NavLink>
           ))}
         </nav>
 
-        {/* Desktop Quick Refresh Button */}
-        <div className="px-3 py-2 border-t border-white/5 dark:border-[#1E2330]">
+        {/* Desktop Manual Refresh Button */}
+        <div className="px-3 py-2">
           <button
             onClick={handleManualRefresh}
             disabled={isRefreshing}

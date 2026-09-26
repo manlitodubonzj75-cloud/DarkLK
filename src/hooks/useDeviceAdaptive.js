@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 /**
  * Hook for comprehensive responsive device adaptation:
- * - Real-time viewport breakpoints (Mobile, Tablet, Desktop)
+ * - Viewport breakpoints (Mobile, Tablet, Desktop)
+ * - Stabilized: does NOT trigger re-renders on minor height changes (URL bar collapse in Safari)
  * - Safe areas and viewport height normalization (--vh)
  * - Environment detection (Capacitor Android/iOS, Electron Desktop, Mobile Web)
  * - Touch vs mouse pointer adaptation
@@ -11,8 +12,6 @@ export function useDeviceAdaptive() {
   const [deviceState, setDeviceState] = useState(() => {
     if (typeof window === 'undefined') {
       return {
-        width: 1280,
-        height: 800,
         isMobile: false,
         isTablet: false,
         isDesktop: true,
@@ -28,8 +27,6 @@ export function useDeviceAdaptive() {
     const isElectron = Boolean(window.electronAPI || (typeof process !== 'undefined' && process.versions?.electron));
 
     return {
-      width: w,
-      height: window.innerHeight,
       isMobile: w < 768,
       isTablet: w >= 768 && w < 1024,
       isDesktop: w >= 1024,
@@ -39,8 +36,13 @@ export function useDeviceAdaptive() {
     };
   });
 
+  const stateRef = useRef(deviceState);
+  stateRef.current = deviceState;
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
+
+    let resizeTimer = null;
 
     const handleResize = () => {
       const w = window.innerWidth;
@@ -53,7 +55,7 @@ export function useDeviceAdaptive() {
       const isTablet = w >= 768 && w < 1024;
       const isDesktop = w >= 1024;
 
-      // Fix 100vh mobile address bar issue
+      // Update CSS variables
       const vh = h * 0.01;
       document.documentElement.style.setProperty('--vh', `${vh}px`);
 
@@ -66,24 +68,39 @@ export function useDeviceAdaptive() {
       root.classList.toggle('device-capacitor', isCapacitor);
       root.classList.toggle('device-electron', isElectron);
 
-      setDeviceState({
-        width: w,
-        height: h,
-        isMobile,
-        isTablet,
-        isDesktop,
-        isTouch,
-        isCapacitor,
-        isElectron
-      });
+      const prev = stateRef.current;
+      // ONLY re-render if responsive breakpoint or touch mode actually changed
+      if (
+        prev.isMobile !== isMobile ||
+        prev.isTablet !== isTablet ||
+        prev.isDesktop !== isDesktop ||
+        prev.isTouch !== isTouch ||
+        prev.isCapacitor !== isCapacitor
+      ) {
+        setDeviceState({
+          isMobile,
+          isTablet,
+          isDesktop,
+          isTouch,
+          isCapacitor,
+          isElectron
+        });
+      }
     };
 
     handleResize();
-    window.addEventListener('resize', handleResize, { passive: true });
+
+    const debouncedResize = () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(handleResize, 100);
+    };
+
+    window.addEventListener('resize', debouncedResize, { passive: true });
     window.addEventListener('orientationchange', handleResize, { passive: true });
 
     return () => {
-      window.removeEventListener('resize', handleResize);
+      if (resizeTimer) clearTimeout(resizeTimer);
+      window.removeEventListener('resize', debouncedResize);
       window.removeEventListener('orientationchange', handleResize);
     };
   }, []);

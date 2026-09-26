@@ -51,9 +51,8 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
-/* Device Adaptation & Overscroll Management */
+/* Overscroll Management */
 html, body {
-  overscroll-behavior-y: none;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -69,15 +68,14 @@ html, body {
   touch-action: manipulation;
 }
 
-/* Standalone / Capacitor Mobile safe-area adjustments */
-.device-capacitor,
-.device-mobile {
+/* Native Capacitor only - avoid user-select none on web/userscripts */
+.device-capacitor {
+  -webkit-user-select: none;
   user-select: none;
 }
 
 .device-capacitor input,
-.device-capacitor textarea,
-.device-mobile input,
-.device-mobile textarea {
+.device-capacitor textarea {
+  -webkit-user-select: text;
   user-select: text;
 }
