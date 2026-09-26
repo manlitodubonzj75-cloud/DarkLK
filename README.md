@@ -33,7 +33,6 @@
 | **macOS** | `.dmg` | Образ диска для Apple Silicon (M1/M2/M3/M4) и Intel |
 | **Windows** | `.exe` | Установщик NSIS x64 |
 | **Linux** | `.AppImage`, `.deb`, `.rpm` | Универсальный AppImage, DEB (Ubuntu/Debian), RPM (Fedora) |
-| **Web** | PWA / SPA | Любой современный браузер |
 
 ---
 
