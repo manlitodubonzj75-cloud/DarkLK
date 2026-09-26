@@ -5,7 +5,7 @@ const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(() => authService.getCachedUser());
-  const [token, setToken] = useState(() => cryptoStorage.getToken() || localStorage.getItem('access_token'));
+  const [token, setToken] = useState(() => cryptoStorage.getToken() || localStorage.getItem('access_token') || localStorage.getItem('token'));
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isOffline, setIsOffline] = useState(() => typeof navigator !== 'undefined' ? !navigator.onLine : false);

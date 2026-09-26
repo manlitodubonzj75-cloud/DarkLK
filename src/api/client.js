@@ -7,12 +7,19 @@
 
 import { cryptoStorage } from './cryptoStorage.js';
 
-// In Electron desktop or Capacitor Android environment, use direct official API URL (zero proxy, 100% 152-FZ compliant)
-// In web dev browser environment, use Vite proxy '/api'
+// In Electron desktop, Capacitor iOS/Android, or Userscript running on msal.ru,
+// use direct official API URL (zero proxy, 100% 152-FZ compliant).
+// In local web dev environment, use Vite proxy '/api'.
+const isUserscriptOrMsalDomain = (typeof window !== 'undefined') && (
+  Boolean(window.__DARKMSAL_USERSCRIPT__) ||
+  Boolean(window.location?.hostname?.includes('msal.ru'))
+);
+
 const isNativeEnv = (typeof window !== 'undefined') && (
   Boolean(window.electronAPI?.apiBaseUrl) ||
   Boolean(window.Capacitor?.isNativePlatform?.()) ||
-  window.Capacitor?.getPlatform?.() === 'android' || window.Capacitor?.getPlatform?.() === 'ios'
+  window.Capacitor?.getPlatform?.() === 'android' || window.Capacitor?.getPlatform?.() === 'ios' ||
+  isUserscriptOrMsalDomain
 );
 
 const BASE_URL = isNativeEnv
@@ -81,7 +88,7 @@ function getStandardHeaders(token = null) {
     'X-Device-Model': deviceModel
   };
 
-  const activeToken = token || cryptoStorage.getToken() || localStorage.getItem('access_token');
+  const activeToken = token || cryptoStorage.getToken() || localStorage.getItem('access_token') || localStorage.getItem('token');
   if (activeToken) {
     headers['Authorization'] = `Bearer ${activeToken}`;
   }
@@ -177,7 +184,7 @@ export async function tryRefreshToken() {
               return true;
             }
           } else if (response.status === 401 || response.status === 403) {
-            // Credentials affirmatively rejected by the server! (Password changed or student expelled)
+            // Credentials rejected by the server
             console.warn('[Auth Client] Saved credentials rejected by university server (401/403).');
             if (typeof window !== 'undefined') {
               window.dispatchEvent(new CustomEvent('auth-session-expired', { detail: 'CREDENTIALS_INVALID' }));
@@ -225,7 +232,7 @@ export async function apiClient(endpoint, options = {}) {
       if (!endpoint.includes('/auth')) {
         const refreshed = await tryRefreshToken();
         if (refreshed) {
-          const newToken = cryptoStorage.getToken() || localStorage.getItem('access_token');
+          const newToken = cryptoStorage.getToken() || localStorage.getItem('access_token') || localStorage.getItem('token');
           headers['Authorization'] = `Bearer ${newToken}`;
           const retryResponse = await fetchWithTimeout(url, { ...config, headers }, timeoutMs);
           if (retryResponse.ok) {
@@ -259,9 +266,13 @@ export async function apiClient(endpoint, options = {}) {
     if (contentType.includes('application/json')) {
       return await response.json();
     }
+
     return await response.text();
-  } catch (error) {
-    console.error(`API Error on [${config.method || 'GET'} ${cleanEndpoint}]:`, error.message);
-    throw error;
+  } catch (err) {
+    if (err.message === 'UNAUTHORIZED') {
+      throw err;
+    }
+    console.warn(`[API] ${endpoint} request failed:`, err.message);
+    throw err;
   }
 }

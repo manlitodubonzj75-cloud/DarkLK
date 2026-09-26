@@ -61,7 +61,7 @@ export const SettingsPage = () => {
   const [updateStatus, setUpdateStatus] = useState(null);
 
   const platform = getAppPlatform();
-  const platformLabel = platform === 'ios' ? 'Apple iOS' : platform === 'android' ? 'Android' : platform === 'mac' ? 'macOS' : platform === 'win' ? 'Windows' : 'Web';
+  const platformLabel = platform === 'userscript' ? 'Userscript (Safari / Web)' : platform === 'ios' ? 'Apple iOS' : platform === 'android' ? 'Android' : platform === 'mac' ? 'macOS' : platform === 'win' ? 'Windows' : 'Web';
 
   const handleCheckUpdates = async () => {
     setCheckingUpdate(true);
@@ -335,6 +335,27 @@ export const SettingsPage = () => {
           )}
         </Card>
       </div>
+
+      {/* Userscript Switch Section */}
+      {platform === 'userscript' && (
+        <div>
+          <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted mb-3 px-1">
+            Интерфейс портала
+          </h3>
+          <Card className="p-4 flex items-center justify-between dark:bg-[#1F2430] dark:border-[#2B3242]">
+            <div>
+              <h4 className="text-sm font-bold text-dark dark:text-white">Стандартный кабинет МГЮА</h4>
+              <p className="text-xs text-textMuted dark:text-[#8E98A8]">Временно скрыть DarkMSAL и вернуться к старому виду сайта</p>
+            </div>
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent('darkmsal-minimize'))}
+              className="px-3 py-1.5 rounded-xl bg-bg dark:bg-[#12151B] hover:bg-border/60 text-dark dark:text-white font-bold text-xs border border-border dark:border-[#2B3242] transition-colors shrink-0 ml-2"
+            >
+              Свернуть
+            </button>
+          </Card>
+        </div>
+      )}
 
       {/* About & Legal Information */}
       <div>

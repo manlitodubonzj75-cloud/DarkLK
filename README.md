@@ -28,7 +28,8 @@
 
 | Платформа | Формат сборки | Метод установки / распространения |
 |:---|:---|:---|
-| **iOS** | `.ipa` | AltStore, SideStore, TrollStore, Scarlet, direct sideload |
+| **iOS / iPadOS (Safari)** | `.user.js` | Бесплатное расширение **Userscripts** / **Stay** из App Store (без ПК и без слёта сертификатов) |
+| **iOS (Standalone)** | `.ipa` | AltStore, SideStore, TrollStore, Scarlet, direct sideload |
 | **Android** | `.apk` | Прямая установка APK / Google Play |
 | **macOS** | `.dmg` | Образ диска для Apple Silicon (M1/M2/M3/M4) и Intel |
 | **Windows** | `.exe` | Установщик NSIS x64 |
@@ -106,6 +107,20 @@ npm run electron:dev
 npm run build
 ```
 Результат будет помещён в директорию `dist/`.
+
+### Сборка Userscript (Safari iOS, Chrome, Firefox, Edge)
+```bash
+npm run build:userscript
+```
+Результат: файл `release/darkmsal.user.js` (~420 КБ, полностью самодостаточный скрипт со встроенным React, стилями Tailwind и автоматическим обновлением).
+
+### 📱 Установка на iPhone / iPad через Safari (Userscript) — Без ПК и слёта сертификатов
+1. Установите бесплатное расширение [Userscripts в App Store](https://apps.apple.com/app/userscripts/id1463298887) (или Stay).
+2. Перейдите в *Настройки -> Safari -> Расширения* и включите **Userscripts**. Разрешите доступ к `lk.msal.ru`.
+3. Откройте в Safari прямую ссылку на скрипт:
+   `https://raw.githubusercontent.com/Dewerro67/MSALKA/main/release/darkmsal.user.js`
+4. В появившемся окне расширения подтвердите установку (**Install**).
+5. Перейдите на [https://lk.msal.ru/](https://lk.msal.ru/) — DarkMSAL откроется автоматически!
 
 ### Сборка под iOS (IPA)
 ```bash

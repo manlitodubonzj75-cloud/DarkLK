@@ -15,7 +15,8 @@ node_modules/
 # Build outputs
 dist/
 dist-ssr/
-release/
+release/*
+!release/darkmsal.user.js
 out/
 
 # Note: The root "build/" folder contains application icon assets (icon.icns, icon.png)
@@ -132,3 +133,4 @@ ios/capacitor-cordova-ios-plugins/
 *.xcuserdatad
 xcuserdata/
 DerivedData/
+dist-userscript/

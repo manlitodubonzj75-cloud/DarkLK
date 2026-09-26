@@ -86,7 +86,7 @@ export const authService = {
   async restoreSession() {
     await cryptoStorage.init();
 
-    const token = cryptoStorage.getToken() || localStorage.getItem('access_token');
+    const token = cryptoStorage.getToken() || localStorage.getItem('access_token') || localStorage.getItem('token');
     const { login: savedLogin, password: savedPassword } = cryptoStorage.getSavedCredentials();
     const offlineUser = this.getCachedUser();
 

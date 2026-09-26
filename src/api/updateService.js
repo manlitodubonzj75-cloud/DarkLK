@@ -1,7 +1,7 @@
 /**
  * Update Service for DarkMSAL
  * Checks GitHub Releases (Dewerro67/MSALKA) for updates, compares semver versions,
- * identifies matching platform assets (.ipa for iOS, .apk for Android, etc.),
+ * identifies matching platform assets (.ipa for iOS, .apk for Android, .user.js for Userscript, etc.),
  * and handles downloading/installing updates on user devices.
  */
 
@@ -42,6 +42,8 @@ export function compareSemver(v1, v2) {
 export function getAppPlatform() {
   if (typeof window === 'undefined') return 'unknown';
 
+  if (Boolean(window.__DARKMSAL_USERSCRIPT__)) return 'userscript';
+
   const capPlatform = window.Capacitor?.getPlatform?.();
   if (capPlatform === 'ios') return 'ios';
   if (capPlatform === 'android') return 'android';
@@ -70,6 +72,9 @@ export function findPlatformAsset(assets, platform) {
   if (!Array.isArray(assets) || assets.length === 0) return null;
 
   switch (platform) {
+    case 'userscript': {
+      return assets.find(a => a.name?.toLowerCase().endsWith('.user.js')) || null;
+    }
     case 'ios': {
       // Look for .ipa file
       return assets.find(a => a.name?.toLowerCase().endsWith('.ipa')) || null;
@@ -222,6 +227,13 @@ export const updateService = {
 
     const { asset, releaseUrl, platform } = updateInfo;
     const downloadUrl = asset?.browser_download_url || releaseUrl;
+
+    if (platform === 'userscript') {
+      if (downloadUrl) {
+        window.location.href = downloadUrl;
+        return;
+      }
+    }
 
     if (platform === 'ios') {
       // On iOS:
