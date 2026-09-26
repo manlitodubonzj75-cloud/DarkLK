@@ -7,6 +7,7 @@ import { Icons } from './Icons';
  * - Strictly ignores touches inside modals, dialogs, and popups
  * - Tactile spring resistance and rotation indicator
  * - Dispatches 'app-pull-to-refresh' event and executes callback
+ * - Optimized with requestAnimationFrame to prevent high-frequency re-rendering
  */
 export const PullToRefresh = ({ children, onRefresh }) => {
   const [pullDistance, setPullDistance] = useState(0);
@@ -15,6 +16,7 @@ export const PullToRefresh = ({ children, onRefresh }) => {
   const currentY = useRef(0);
   const isDragging = useRef(false);
   const containerRef = useRef(null);
+  const rafRef = useRef(null);
 
   const TRIGGER_THRESHOLD = 65; // px to trigger refresh
   const MAX_PULL = 90;
@@ -55,6 +57,7 @@ export const PullToRefresh = ({ children, onRefresh }) => {
     // Abort if finger dragged into or out of a modal
     if (isInsideModal(e.target)) {
       isDragging.current = false;
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
       setPullDistance(0);
       return;
     }
@@ -62,6 +65,7 @@ export const PullToRefresh = ({ children, onRefresh }) => {
     const scrollElem = containerRef.current;
     if (scrollElem && scrollElem.scrollTop > 2) {
       isDragging.current = false;
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
       setPullDistance(0);
       return;
     }
@@ -69,12 +73,17 @@ export const PullToRefresh = ({ children, onRefresh }) => {
     currentY.current = e.touches[0].clientY;
     const diff = currentY.current - startY.current;
 
-    if (diff > 0) {
-      // Damped pull curve
-      const distance = Math.min(diff * 0.45, MAX_PULL);
-      setPullDistance(distance);
+    if (diff > 8) {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(() => {
+        const distance = Math.min((diff - 8) * 0.45, MAX_PULL);
+        setPullDistance(distance);
+      });
     } else {
-      setPullDistance(0);
+      if (pullDistance !== 0) {
+        if (rafRef.current) cancelAnimationFrame(rafRef.current);
+        setPullDistance(0);
+      }
     }
   };
 
@@ -106,6 +115,7 @@ export const PullToRefresh = ({ children, onRefresh }) => {
   }, [onRefresh]);
 
   const handleTouchEnd = () => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
     if (!isDragging.current) return;
     isDragging.current = false;
 
@@ -122,7 +132,10 @@ export const PullToRefresh = ({ children, onRefresh }) => {
       if (!isRefreshing) executeRefresh();
     };
     window.addEventListener('trigger-app-refresh', handleTrigger);
-    return () => window.removeEventListener('trigger-app-refresh', handleTrigger);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      window.removeEventListener('trigger-app-refresh', handleTrigger);
+    };
   }, [executeRefresh, isRefreshing]);
 
   return (
@@ -158,12 +171,13 @@ export const PullToRefresh = ({ children, onRefresh }) => {
         </div>
       </div>
 
-      {/* Main Content */}
+      {/* Main Page Children Content */}
       <div
-        className="w-full min-w-0 transition-transform duration-150"
         style={{
-          transform: pullDistance > 0 ? `translateY(${Math.min(pullDistance * 0.4, 30)}px)` : 'none'
+          transform: `translateY(${pullDistance * 0.4}px)`,
+          transition: isDragging.current ? 'none' : 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)'
         }}
+        className="w-full min-h-full"
       >
         {children}
       </div>
