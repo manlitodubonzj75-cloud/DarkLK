@@ -56,32 +56,13 @@ export const ConsultationsPage = () => {
       });
     } catch (err) {
       console.warn('Load consultations warning:', err);
-      if (!myConsultations || myConsultations.length === 0) {
-        setErrorMy(err.message === 'UNAUTHORIZED' 
-          ? 'Требуется повторная авторизация' 
-          : (err.message || 'Не удалось загрузить записи'));
-      }
+      setErrorMy(err.message === 'UNAUTHORIZED' 
+        ? 'Требуется повторная авторизация' 
+        : (err.message || 'Не удалось загрузить записи'));
     } finally {
       setLoadingMy(false);
     }
-  }, [startDate, endDate, myConsultations]);
-
-  useEffect(() => {
-    loadMyConsultations();
-  }, [loadMyConsultations]);
-
-  // Pull-to-refresh listener
-  useEffect(() => {
-    const handlePull = () => {
-      cacheService.remove("consultation_student_list");
-      cacheService.remove("student_disciplines");
-      cacheService.remove("consultation_themes");
-      loadMyConsultations();
-      loadDisciplinesAndThemes();
-    };
-    window.addEventListener("app-pull-to-refresh", handlePull);
-    return () => window.removeEventListener("app-pull-to-refresh", handlePull);
-  }, [loadMyConsultations, loadDisciplinesAndThemes]);
+  }, [startDate, endDate]);
 
   // Load Disciplines & Themes
   const loadDisciplinesAndThemes = useCallback(async () => {
@@ -100,22 +81,38 @@ export const ConsultationsPage = () => {
       cacheService.set('consultation_themes', validThemes);
     } catch (err) {
       console.warn('Load disciplines warning:', err);
-      if (disciplines.length === 0) {
-        setBookMessage({ 
-          text: err.message === 'UNAUTHORIZED'
-            ? 'Сессия истекла. Пожалуйста, войдите снова.'
-            : 'Ошибка загрузки списка дисциплин с сервера вуза', 
-          type: 'error' 
-        });
-      }
+      setBookMessage({ 
+        text: err.message === 'UNAUTHORIZED'
+          ? 'Сессия истекла. Пожалуйста, войдите снова.'
+          : 'Ошибка загрузки списка дисциплин с сервера вуза', 
+        type: 'error' 
+      });
     } finally {
       setLoadingBookingData(false);
     }
-  }, [disciplines.length]);
+  }, []);
+
+  // Initial loads
+  useEffect(() => {
+    loadMyConsultations();
+  }, [loadMyConsultations]);
 
   useEffect(() => {
     loadDisciplinesAndThemes();
   }, [loadDisciplinesAndThemes]);
+
+  // Pull-to-refresh listener
+  useEffect(() => {
+    const handlePull = () => {
+      cacheService.remove("consultation_student_list");
+      cacheService.remove("student_disciplines");
+      cacheService.remove("consultation_themes");
+      loadMyConsultations();
+      loadDisciplinesAndThemes();
+    };
+    window.addEventListener("app-pull-to-refresh", handlePull);
+    return () => window.removeEventListener("app-pull-to-refresh", handlePull);
+  }, [loadMyConsultations, loadDisciplinesAndThemes]);
 
   // Load Teachers when Discipline changes
   const loadTeachers = useCallback(async (discId) => {

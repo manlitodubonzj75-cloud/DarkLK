@@ -344,7 +344,11 @@ export const lkService = {
         !isCollege ? apiClient(`/consultation/student?from=${from}&to=${to}`).catch(() => []) : Promise.resolve([])
       ]);
 
-      const scheduleData = scheduleResp.status === 'fulfilled' ? scheduleResp.value : [];
+      if (scheduleResp.status === 'rejected') {
+        throw scheduleResp.reason || new Error('Failed to fetch schedule from university server');
+      }
+
+      const scheduleData = scheduleResp.value || [];
       const consultations = consultationsResp.status === 'fulfilled' ? consultationsResp.value : [];
 
       return this.mergeScheduleWithConsultations(scheduleData, consultations);

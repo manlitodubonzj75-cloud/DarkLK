@@ -6,6 +6,8 @@ import { Icons } from '../../components/common/Icons';
 import { Logo } from '../../components/common/Logo';
 import { LegalModal } from '../../components/common/LegalModal';
 
+const LEGAL_ACCEPTED_KEY = 'msal_legal_accepted_v1';
+
 export const LoginPage = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -14,11 +16,34 @@ export const LoginPage = () => {
   const [errorMessage, setErrorMessage] = useState('');
   const [legalModalTab, setLegalModalTab] = useState(null);
 
+  // Consent gate state
+  const [isLegalAccepted, setIsLegalAccepted] = useState(() => {
+    return Boolean(localStorage.getItem(LEGAL_ACCEPTED_KEY));
+  });
+  const [consentError, setConsentError] = useState(false);
+
   const { login } = useAuth();
   const navigate = useNavigate();
 
+  const handleToggleConsent = (checked) => {
+    setIsLegalAccepted(checked);
+    if (checked) {
+      localStorage.setItem(LEGAL_ACCEPTED_KEY, String(Date.now()));
+      setConsentError(false);
+    } else {
+      localStorage.removeItem(LEGAL_ACCEPTED_KEY);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    if (!isLegalAccepted) {
+      setConsentError(true);
+      setErrorMessage('Для входа в приложение необходимо принять Условия использования и Политику конфиденциальности');
+      return;
+    }
+
     if (!username || !password) {
       setErrorMessage('Пожалуйста, введите логин и пароль');
       return;
@@ -31,6 +56,7 @@ export const LoginPage = () => {
     setIsLoading(false);
 
     if (result.success) {
+      localStorage.setItem(LEGAL_ACCEPTED_KEY, String(Date.now()));
       navigate('/');
     } else {
       setErrorMessage(result.error || 'Ошибка входа в систему');
@@ -63,7 +89,7 @@ export const LoginPage = () => {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-xs font-bold uppercase tracking-wider mb-2 text-textMuted dark:text-[#8E98A8]">
-                Логин или Email
+                Логин
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-textMuted dark:text-[#8E98A8]">
@@ -72,7 +98,7 @@ export const LoginPage = () => {
                 <input
                   type="text"
                   required
-                  placeholder="sc1234567 или логин"
+                  placeholder="Логин"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   className="w-full pl-10 pr-4 py-3 bg-bg dark:bg-[#12151B] border border-border dark:border-[#2B3242] rounded-xl text-dark dark:text-white text-sm placeholder:text-textMuted/60 dark:placeholder:text-[#8E98A8]/60 focus:outline-none focus:ring-2 focus:ring-primary dark:focus:ring-[#1E6685] transition-all"
@@ -108,51 +134,77 @@ export const LoginPage = () => {
               </div>
             </div>
 
+            {/* Mandatory Consent Gate Checkbox */}
+            <div className={`p-3.5 rounded-2xl border transition-all ${
+              consentError
+                ? 'bg-rose-50/60 dark:bg-rose-950/20 border-rose-300 dark:border-rose-900/60 ring-2 ring-rose-400/20'
+                : 'bg-bg dark:bg-[#12151B] border border-border dark:border-[#2B3242]'
+            }`}>
+              <label className="flex items-start space-x-3 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={isLegalAccepted}
+                  onChange={(e) => handleToggleConsent(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 rounded text-primary focus:ring-primary border-border dark:border-gray-600 dark:bg-gray-800 cursor-pointer shrink-0"
+                />
+                <span className="text-xs text-text dark:text-[#CBD5E1] leading-relaxed">
+                  Я прочитал(а) и принимаю{' '}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setLegalModalTab('terms');
+                    }}
+                    className="font-bold text-primary dark:text-[#38BDF8] underline hover:opacity-85 inline"
+                  >
+                    Условия использования
+                  </button>{' '}
+                  и{' '}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setLegalModalTab('privacy');
+                    }}
+                    className="font-bold text-primary dark:text-[#38BDF8] underline hover:opacity-85 inline"
+                  >
+                    Политику конфиденциальности
+                  </button>
+                  , подтверждаю согласие с принципами прямого соединения и локального шифрования AES-256 (152-ФЗ).
+                </span>
+              </label>
+            </div>
+
             <button
               type="submit"
-              disabled={isLoading}
-              className="w-full py-3.5 px-4 mt-2 bg-primary hover:bg-primary-dark dark:bg-[#1E6685] dark:hover:bg-[#257C9F] text-white font-bold rounded-xl shadow-md transition-all active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none flex items-center justify-center space-x-2 text-sm tracking-wider uppercase"
+              disabled={isLoading || !isLegalAccepted}
+              className="w-full py-3.5 px-4 bg-primary dark:bg-[#1E6685] hover:bg-primary/90 dark:hover:bg-[#1E6685]/90 text-white font-bold rounded-xl shadow-lg shadow-primary/20 dark:shadow-none transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2 active:scale-[0.99]"
             >
               {isLoading ? (
                 <>
-                  <div className="animate-spin rounded-full border-2 border-white border-t-transparent h-5 w-5"></div>
-                  <span>Вход в систему...</span>
+                  <Icons.Refresh size={18} className="animate-spin" />
+                  <span>Вход...</span>
                 </>
+              ) : !isLegalAccepted ? (
+                <span>Примите условия для входа</span>
               ) : (
-                <span>ВОЙТИ</span>
+                <span>Войти в личный кабинет</span>
               )}
             </button>
           </form>
         </Card>
 
-        {/* Security & Legal Footer */}
-        <div className="text-center mt-6 space-y-2">
-          <p className="text-xs text-textMuted dark:text-[#8E98A8]">
-            Прямое подключение к серверу МГЮА (lk.msal.ru:3443) • AES-256
-          </p>
-          <div className="flex items-center justify-center space-x-2 text-[11px] text-textMuted dark:text-[#8E98A8]">
-            <button
-              onClick={() => setLegalModalTab('terms')}
-              className="hover:text-primary dark:hover:text-[#38BDF8] underline transition-colors"
-            >
-              Условия использования
-            </button>
-            <span>•</span>
-            <button
-              onClick={() => setLegalModalTab('privacy')}
-              className="hover:text-primary dark:hover:text-[#38BDF8] underline transition-colors"
-            >
-              Политика конфиденциальности
-            </button>
-          </div>
-        </div>
+        {/* Footer info */}
+        <p className="text-center text-xs text-textMuted dark:text-[#8E98A8] mt-8">
+          Прямое защищённое соединение с серверами МГЮА без посредников
+        </p>
       </div>
 
-      {/* Legal Information Modal */}
+      {/* Terms and Privacy Modal */}
       <LegalModal
-        isOpen={!!legalModalTab}
-        onClose={() => setLegalModalTab(null)}
+        isOpen={Boolean(legalModalTab)}
         initialTab={legalModalTab || 'terms'}
+        onClose={() => setLegalModalTab(null)}
       />
     </div>
   );

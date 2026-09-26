@@ -9,6 +9,10 @@
   "android": {
     "allowMixedContent": true
   },
+  "ios": {
+    "scheme": "DarkMSAL",
+    "limitsNavigationsToAppBoundDomains": false
+  },
   "plugins": {
     "CapacitorHttp": {
       "enabled": true

@@ -7,7 +7,7 @@ import { Card } from '../../components/common/Card';
 import { Logo } from '../../components/common/Logo';
 import { LegalModal } from '../../components/common/LegalModal';
 import { Icons } from '../../components/common/Icons';
-
+import { updateService, getAppPlatform } from '../../api/updateService';
 
 function parsePrivacyBool(val, fallback = false) {
   if (val === undefined || val === null) return fallback;
@@ -57,6 +57,43 @@ export const SettingsPage = () => {
   const [privacy, setPrivacy] = useState(() => resolveUserPrivacy(user));
   const [savingPrivacy, setSavingPrivacy] = useState(false);
   const [legalModalTab, setLegalModalTab] = useState(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState(null);
+
+  const platform = getAppPlatform();
+  const platformLabel = platform === 'ios' ? 'Apple iOS' : platform === 'android' ? 'Android' : platform === 'mac' ? 'macOS' : platform === 'win' ? 'Windows' : 'Web';
+
+  const handleCheckUpdates = async () => {
+    setCheckingUpdate(true);
+    setUpdateStatus(null);
+    try {
+      const res = await updateService.checkForUpdates({ force: true });
+      if (res?.hasUpdate) {
+        setUpdateStatus({
+          hasUpdate: true,
+          text: `Доступна новая версия v${res.latestVersion}!`,
+          info: res
+        });
+      } else if (res?.error) {
+        setUpdateStatus({
+          hasUpdate: false,
+          text: `Ошибка проверки: ${res.error}`
+        });
+      } else {
+        setUpdateStatus({
+          hasUpdate: false,
+          text: 'У вас установлена самая актуальная версия приложения'
+        });
+      }
+    } catch (err) {
+      setUpdateStatus({
+        hasUpdate: false,
+        text: 'Не удалось проверить обновления'
+      });
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
 
   // Synchronize privacy settings from server /student/access or updated user profile
   useEffect(() => {
@@ -159,7 +196,6 @@ export const SettingsPage = () => {
                 {user.course} курс
               </span>
             )}
-
           </div>
         </div>
       </Card>
@@ -244,7 +280,63 @@ export const SettingsPage = () => {
         </Card>
       </div>
 
-            {/* About & Legal Information */}
+      {/* App Updates Section */}
+      <div>
+        <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted mb-3 px-1">
+          Обновление приложения
+        </h3>
+        <Card className="p-5 space-y-3 dark:bg-[#1F2430] dark:border-[#2B3242]">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <div className="p-2.5 rounded-xl bg-primary/10 text-primary dark:text-[#38BDF8]">
+                <Icons.Download size={20} />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-dark dark:text-white">Текущая версия: v{updateService.getAppVersion()}</h4>
+                <p className="text-xs text-textMuted">Платформа: {platformLabel}</p>
+              </div>
+            </div>
+
+            <button
+              onClick={handleCheckUpdates}
+              disabled={checkingUpdate}
+              className="px-3.5 py-2 rounded-xl bg-primary hover:bg-primary/90 text-white font-bold text-xs flex items-center space-x-1.5 transition-all disabled:opacity-50"
+            >
+              {checkingUpdate ? (
+                <>
+                  <Icons.Refresh size={14} className="animate-spin" />
+                  <span>Проверка...</span>
+                </>
+              ) : (
+                <>
+                  <Icons.Refresh size={14} />
+                  <span>Проверить</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {updateStatus && (
+            <div className={`p-3 rounded-xl text-xs font-medium border flex items-center justify-between ${
+              updateStatus.hasUpdate
+                ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900/50 text-emerald-800 dark:text-emerald-200'
+                : 'bg-bg dark:bg-[#12151B] border-border dark:border-[#283245] text-textMuted dark:text-[#8E98A8]'
+            }`}>
+              <span>{updateStatus.text}</span>
+              {updateStatus.hasUpdate && (
+                <button
+                  onClick={() => window.dispatchEvent(new CustomEvent('app-show-update-modal', { detail: updateStatus.info }))}
+                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs ml-2 shrink-0 transition-colors"
+                >
+                  Обновить
+                </button>
+              )}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      {/* About & Legal Information */}
       <div>
         <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted mb-3 px-1">
           О приложении и безопасность
@@ -257,7 +349,7 @@ export const SettingsPage = () => {
               <p className="text-xs text-textMuted dark:text-[#8E98A8]">для Альма Матер с любовью.</p>
               <div className="flex items-center space-x-2 mt-1">
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-bg dark:bg-[#12151B] border border-border dark:border-[#2B3242] text-textMuted dark:text-[#8E98A8]">
-                  Версия 2.0.1
+                  Версия 1.0
                 </span>
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                   AES-256 (152-ФЗ)
@@ -299,7 +391,7 @@ export const SettingsPage = () => {
       {/* Version info */}
       <div className="text-center pt-2 pb-2">
         <p className="text-xs font-mono text-textMuted dark:text-[#8E98A8]">
-          DarkMSAL v2.0.1
+          DarkMSAL v1.0
         </p>
       </div>
 

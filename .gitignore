@@ -118,3 +118,17 @@ __MACOSX/
 .agents/
 .gemini/
 .claude/
+
+# iOS & Xcode
+*.ipa
+*.xcarchive
+build/*.xcarchive
+ios/App/Pods/
+ios/App/App/public/
+ios/App/App/capacitor.config.json
+ios/App/App/config.xml
+ios/capacitor-cordova-ios-plugins/
+*.xcuserstate
+*.xcuserdatad
+xcuserdata/
+DerivedData/

@@ -12,7 +12,7 @@ import { cryptoStorage } from './cryptoStorage.js';
 const isNativeEnv = (typeof window !== 'undefined') && (
   Boolean(window.electronAPI?.apiBaseUrl) ||
   Boolean(window.Capacitor?.isNativePlatform?.()) ||
-  window.Capacitor?.getPlatform?.() === 'android'
+  window.Capacitor?.getPlatform?.() === 'android' || window.Capacitor?.getPlatform?.() === 'ios'
 );
 
 const BASE_URL = isNativeEnv

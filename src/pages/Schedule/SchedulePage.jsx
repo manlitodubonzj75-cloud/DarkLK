@@ -46,6 +46,9 @@ export const SchedulePage = () => {
       const data = await lkService.getScheduleWeek(monday);
       if (Array.isArray(data) && data.length > 0) {
         setScheduleData(data);
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("app-schedule-updated"));
+        }
       }
     } catch (err) {
       if (!cached) {

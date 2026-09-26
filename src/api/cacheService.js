@@ -128,7 +128,8 @@ export const cacheService = {
     const ttl = options.ttl || null;
 
     // Fast-path: if valid cache exists and is within TTL, return immediately without hitting network
-    if (!options.forceRefresh && ttl && cached !== null && info && info.ageMs < ttl) {
+    const isCachedValid = cached !== null && (!Array.isArray(cached) || cached.length > 0);
+    if (!options.forceRefresh && ttl && isCachedValid && info && info.ageMs < ttl) {
       return cached;
     }
 
@@ -141,6 +142,9 @@ export const cacheService = {
         if (Array.isArray(freshData)) {
           if (freshData.length > 0 || !Array.isArray(cached) || cached.length === 0) {
             this.set(key, freshData);
+          }
+          if (freshData.length === 0 && Array.isArray(cached) && cached.length > 0) {
+            return cached;
           }
         } else if (typeof freshData === "object") {
           if (Object.keys(freshData).length > 0 || !cached) {

@@ -5,6 +5,8 @@ import { useTheme } from '../../context/ThemeContext';
 import { Icons } from '../common/Icons';
 import { Logo } from '../common/Logo';
 import { LegalModal } from '../common/LegalModal';
+import { UpdateModal } from '../common/UpdateModal';
+import { updateService } from '../../api/updateService';
 import { useDeviceAdaptive } from "../../hooks/useDeviceAdaptive";
 import { PullToRefresh } from "../common/PullToRefresh";
 
@@ -14,6 +16,11 @@ export const AppShell = () => {
   const navigate = useNavigate();
   const [legalModalTab, setLegalModalTab] = React.useState(null);
   const [isRefreshing, setIsRefreshing] = React.useState(false);
+  const [updateInfo, setUpdateInfo] = React.useState(null);
+  const [showUpdateModal, setShowUpdateModal] = React.useState(false);
+  const [showLegalGate, setShowLegalGate] = React.useState(() => {
+    return !Boolean(localStorage.getItem("msal_legal_accepted_v1"));
+  });
   const device = useDeviceAdaptive();
 
   const ALL_NAV_ITEMS = [
@@ -57,6 +64,30 @@ export const AppShell = () => {
       minute: '2-digit'
     });
   };
+
+  React.useEffect(() => {
+    const timer = setTimeout(async () => {
+      const res = await updateService.checkForUpdates({ force: false });
+      if (res?.hasUpdate) {
+        setUpdateInfo(res);
+        setShowUpdateModal(true);
+      }
+    }, 2500);
+
+    const handleManualCheckEvent = (e) => {
+      if (e.detail) {
+        setUpdateInfo(e.detail);
+        setShowUpdateModal(true);
+      }
+    };
+
+    window.addEventListener('app-show-update-modal', handleManualCheckEvent);
+
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('app-show-update-modal', handleManualCheckEvent);
+    };
+  }, []);
 
   const handleManualRefresh = async () => {
     if (isRefreshing) return;
@@ -163,7 +194,7 @@ export const AppShell = () => {
               Конфиденциальность
             </button>
           </div>
-          <span className="font-mono font-semibold text-accent dark:text-[#38BDF8]">v2.0.1</span>
+          <span className="font-mono font-semibold text-accent dark:text-[#38BDF8]">v1.0</span>
         </div>
 
         {/* Sidebar Footer Controls */}
@@ -290,6 +321,28 @@ export const AppShell = () => {
         isOpen={Boolean(legalModalTab)}
         initialTab={legalModalTab || 'terms'}
         onClose={() => setLegalModalTab(null)}
+      />
+
+      {showLegalGate && (
+        <LegalModal
+          isOpen={true}
+          initialTab="terms"
+          showAcceptButton={true}
+          onClose={() => {
+            logout();
+            navigate("/login");
+          }}
+          onAccept={() => {
+            localStorage.setItem("msal_legal_accepted_v1", String(Date.now()));
+            setShowLegalGate(false);
+          }}
+        />
+      )}
+
+      <UpdateModal
+        isOpen={showUpdateModal}
+        updateInfo={updateInfo}
+        onClose={() => setShowUpdateModal(false)}
       />
     </div>
   );
