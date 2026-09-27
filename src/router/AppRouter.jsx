@@ -19,7 +19,7 @@ const ProtectedRoute = ({ children }) => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-bg">
+      <div className="h-full min-h-full flex items-center justify-center bg-bg">
         <LoadingSpinner size={12} text="Авторизация в системе..." />
       </div>
     );
@@ -34,6 +34,10 @@ const ProtectedRoute = ({ children }) => {
 
 export const AppRouter = () => {
   const { isAuthenticated, isLoading, isCollege } = useAuth();
+  const location = useLocation();
+  const loginRedirectTo = location.state?.from?.pathname && location.state.from.pathname !== '/login'
+    ? location.state.from.pathname
+    : '/';
 
   return (
     <Routes>
@@ -41,7 +45,7 @@ export const AppRouter = () => {
       <Route
         path="/login"
         element={
-          !isLoading && isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />
+          !isLoading && isAuthenticated ? <Navigate to={loginRedirectTo} replace /> : <LoginPage />
         }
       />
 

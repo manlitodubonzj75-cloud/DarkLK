@@ -163,9 +163,23 @@ export const AuthProvider = ({ children }) => {
       }
       throw new Error('Не удалось получить токен доступа');
     } catch (err) {
-      const msg = err.status === 401 
-        ? 'Неверный логин или пароль' 
-        : (err.message || 'Ошибка авторизации. Проверьте соединение с сервером.');
+      // apiClient бросает технические англоязычные ошибки ('UNAUTHORIZED', 'Request timed out…',
+      // 'Failed to fetch', HTML-тело ответа) — показываем пользователю понятный русский текст
+      const rawMsg = String(err?.message || '');
+      let msg;
+      if (err?.status === 401 || rawMsg === 'UNAUTHORIZED') {
+        msg = 'Неверный логин или пароль';
+      } else if (err?.name === 'TimeoutError' || err?.status === 408) {
+        msg = 'Сервер МГЮА не отвечает. Попробуйте ещё раз чуть позже.';
+      } else if (err?.status === 0 || err?.name === 'TypeError' || /failed to fetch|load failed|network/i.test(rawMsg)) {
+        msg = 'Нет соединения с сервером. Проверьте подключение к интернету.';
+      } else if (err?.status >= 500) {
+        msg = `Сервер МГЮА временно недоступен (ошибка ${err.status}). Попробуйте позже.`;
+      } else if (/[а-яё]/i.test(rawMsg) && rawMsg.length <= 300) {
+        msg = rawMsg;
+      } else {
+        msg = 'Ошибка авторизации. Проверьте соединение с сервером.';
+      }
       setError(msg);
       return { success: false, error: msg };
     } finally {

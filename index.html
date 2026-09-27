@@ -6,6 +6,15 @@
     <link rel="icon" type="image/svg+xml" href="./logo.svg" />
     <title>DarkMSAL | для Альма Матер с любовью.</title>
     <meta name="description" content="DarkMSAL — для Альма Матер с любовью. Клиентское приложение для студентов МГЮА им. О.Е. Кутафина." />
+    <script>
+      // Применяем тему до загрузки React, чтобы не было вспышки светлой темы при старте
+      try {
+        var t = localStorage.getItem('msal_theme');
+        if (t === 'dark' || (!t && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        }
+      } catch (e) {}
+    </script>
   </head>
   <body class="h-full w-full overflow-hidden bg-bg dark:bg-[#12151B] text-dark dark:text-white m-0 p-0">
     <div id="root" class="h-full w-full overflow-hidden"></div>

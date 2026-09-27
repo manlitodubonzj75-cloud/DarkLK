@@ -30,7 +30,9 @@ function parseLessonDate(dateStr) {
       return new Date(y, m, d);
     }
   }
-  const iso = new Date(dateStr);
+  const str = String(dateStr).trim();
+  // 'YYYY-MM-DD' без времени — локальная дата, а не UTC-полночь
+  const iso = /^\d{4}-\d{2}-\d{2}$/.test(str) ? new Date(`${str}T00:00:00`) : new Date(str);
   if (!isNaN(iso.getTime())) return iso;
   return null;
 }

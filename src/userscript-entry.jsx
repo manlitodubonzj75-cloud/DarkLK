@@ -42,37 +42,18 @@ function initDarkMSAL() {
 
   updateLegacySite(isEnabled);
 
-  // Inject iOS Safari touch optimization CSS
-  const iosFixStyle = document.createElement('style');
-  iosFixStyle.id = 'darkmsal-ios-touch-fix';
-  iosFixStyle.textContent = `
-    #darkmsal-root {
-      position: fixed !important;
-      top: 0 !important;
-      left: 0 !important;
-      right: 0 !important;
-      bottom: 0 !important;
-      width: 100% !important;
-      height: 100% !important;
-      height: 100dvh !important;
-      overflow: hidden !important;
-      margin: 0 !important;
-      padding: 0 !important;
-      -webkit-font-smoothing: antialiased;
-    }
-    #darkmsal-root * {
-      -webkit-tap-highlight-color: transparent;
-    }
-    #darkmsal-root button,
-    #darkmsal-root [role="button"],
-    #darkmsal-root a,
-    #darkmsal-root .cursor-pointer,
-    #darkmsal-floating-toggle {
-      touch-action: manipulation !important;
-      cursor: pointer;
-    }
-  `;
-  document.head.appendChild(iosFixStyle);
+  // Без meta viewport мобильный браузер рисует страницу шириной 980px — интерфейс становится мелким
+  if (!document.querySelector('meta[name="viewport"]')) {
+    const vp = document.createElement('meta');
+    vp.name = 'viewport';
+    vp.content = 'width=device-width, initial-scale=1, viewport-fit=cover';
+    (document.head || document.documentElement).appendChild(vp);
+  }
+
+  const floatingStyle = document.createElement('style');
+  floatingStyle.id = 'darkmsal-floating-style';
+  floatingStyle.textContent = `#darkmsal-floating-toggle { touch-action: manipulation !important; cursor: pointer; }`;
+  (document.head || document.documentElement).appendChild(floatingStyle);
 
   // Main container overlay (does NOT have overflow-y: auto - scrolling happens inside AppShell PullToRefresh)
   const rootContainer = document.createElement('div');
@@ -87,7 +68,14 @@ function initDarkMSAL() {
   rootContainer.style.zIndex = '2147483640';
   rootContainer.style.overflow = 'hidden';
   rootContainer.style.display = isEnabled ? 'block' : 'none';
-  rootContainer.style.backgroundColor = '#0b0f19';
+  // Фон и класс темы до рендера React — иначе в светлой теме при старте мигает тёмный экран
+  let prefersDark = false;
+  try {
+    const savedTheme = localStorage.getItem('msal_theme');
+    prefersDark = savedTheme ? savedTheme === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+  } catch (_) {}
+  if (prefersDark && isEnabled) document.documentElement.classList.add('dark');
+  rootContainer.style.backgroundColor = prefersDark ? '#12151B' : '#F8FAFC';
 
   // Floating button to return to DarkMSAL from legacy university LK
   const floatingBtn = document.createElement('button');
@@ -138,9 +126,42 @@ function initDarkMSAL() {
   document.body.appendChild(rootContainer);
   document.body.appendChild(floatingBtn);
 
+  // Интерфейс живёт в Shadow DOM: стили сайта вуза не ломают DarkMSAL,
+  // а Tailwind (preflight и т.п.) не ломает сайт вуза в свёрнутом режиме.
+  const shadow = rootContainer.attachShadow({ mode: 'open' });
+  const shadowStyle = document.createElement('style');
+  /* eslint-disable no-undef */
+  const appCss = typeof __DARKMSAL_CSS__ === 'string' ? __DARKMSAL_CSS__ : '';
+  /* eslint-enable no-undef */
+  shadowStyle.textContent = appCss
+    // переменные темы и базовые стили, объявленные для документа, переносим на корень приложения
+    .replace(/:root\b/g, ':host')
+    .replace(/\.dark body\b/g, '.dark#darkmsal-app')
+    .replace(/(^|[},\s])body(?=[\s{,.:])/g, '$1#darkmsal-app')
+    + `
+    :host { all: initial; display: block; }
+    #darkmsal-app { position: absolute; inset: 0; overflow: hidden; }
+    #darkmsal-app * { -webkit-tap-highlight-color: transparent; }
+    #darkmsal-app button, #darkmsal-app [role="button"], #darkmsal-app a, #darkmsal-app .cursor-pointer {
+      touch-action: manipulation; cursor: pointer;
+    }`;
+  shadow.appendChild(shadowStyle);
+
+  const appContainer = document.createElement('div');
+  appContainer.id = 'darkmsal-app';
+  shadow.appendChild(appContainer);
+
+  // Тёмная тема: ThemeContext ставит класс на <html>, а селекторы Tailwind .dark не видят его
+  // сквозь границу Shadow DOM — зеркалим класс на корень приложения.
+  const syncDarkClass = () => {
+    appContainer.classList.toggle('dark', document.documentElement.classList.contains('dark'));
+  };
+  syncDarkClass();
+  new MutationObserver(syncDarkClass).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+
   // Ключ шифрования хранится в GM-хранилище менеджера скриптов (страница его не видит).
   cryptoStorage.init().finally(() => {
-    ReactDOM.createRoot(rootContainer).render(
+    ReactDOM.createRoot(appContainer).render(
       <React.StrictMode>
         <App />
       </React.StrictMode>

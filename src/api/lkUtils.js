@@ -21,12 +21,13 @@ export function formatDisplayDate(dateStr) {
   if (!dateStr || dateStr.startsWith('0001-01-01')) return '';
   if (/^\d{2}\.\d{2}\.\d{4}$/.test(dateStr)) {
     const [dd, mm, yyyy] = dateStr.split('.');
-    const d = new Date(`${yyyy}-${mm}-${dd}`);
+    // Локальная полночь: new Date('YYYY-MM-DD') парсится как UTC и в западных поясах сдвигает день
+    const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
     if (!isNaN(d.getTime())) {
       return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
     }
   }
-  const d = new Date(dateStr);
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? new Date(`${dateStr}T00:00:00`) : new Date(dateStr);
   if (isNaN(d.getTime()) || d.getFullYear() <= 1970) return '';
   return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
 }
@@ -45,7 +46,9 @@ export function parseLessonDate(dateStr) {
       return new Date(y, m, d);
     }
   }
-  const iso = new Date(dateStr);
+  const str = String(dateStr).trim();
+  // 'YYYY-MM-DD' без времени — локальная дата, а не UTC-полночь
+  const iso = /^\d{4}-\d{2}-\d{2}$/.test(str) ? new Date(`${str}T00:00:00`) : new Date(str);
   if (!isNaN(iso.getTime())) return iso;
   return null;
 }

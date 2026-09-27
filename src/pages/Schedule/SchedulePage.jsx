@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { lkService, formatISODate, getMondayOfWeek, formatLessonTime, cacheService } from '../../api';
 import { Card } from '../../components/common/Card';
@@ -7,15 +7,35 @@ import { Icons } from '../../components/common/Icons';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { ErrorMessage } from '../../components/common/ErrorMessage';
 
+// 'YYYY-MM-DD' -> локальная дата (new Date('YYYY-MM-DD') — это UTC-полночь)
+const parseISODateLocal = (iso) => new Date(`${iso}T00:00:00`);
+
+// Поля могут прийти объектом ({ name }) — React не умеет рендерить объекты
+const asText = (v) => (v && typeof v === 'object' ? (v.name || v.title || '') : v);
+
+// В сетке нет воскресений: если выбран вс — берём следующий пн
+const skipSunday = (d) => {
+  const res = new Date(d);
+  if (res.getDay() === 0) res.setDate(res.getDate() + 1);
+  return res;
+};
+
+// В воскресенье пар обычно нет — по умолчанию показываем понедельник следующей недели
+const defaultScheduleDay = () => {
+  const d = new Date();
+  if (d.getDay() === 0) d.setDate(d.getDate() + 1);
+  return d;
+};
+
 export const SchedulePage = () => {
   const { isCollege } = useAuth();
   const [viewMode, setViewMode] = useState('week'); // 'week' | 'month'
-  const [currentMonday, setCurrentMonday] = useState(() => getMondayOfWeek(new Date()));
+  const [currentMonday, setCurrentMonday] = useState(() => getMondayOfWeek(defaultScheduleDay()));
   const [currentMonthDate, setCurrentMonthDate] = useState(() => {
-    const d = new Date();
+    const d = defaultScheduleDay();
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
-  const [selectedDateISO, setSelectedDateISO] = useState(() => formatISODate(new Date()));
+  const [selectedDateISO, setSelectedDateISO] = useState(() => formatISODate(defaultScheduleDay()));
 
   // Cache helper for a week
   const getCachedWeek = (mon) => {
@@ -31,9 +51,12 @@ export const SchedulePage = () => {
   const [scheduleData, setScheduleData] = useState(() => initialCached || []);
   const [isLoading, setIsLoading] = useState(() => !initialCached);
   const [error, setError] = useState(null);
+  // Защита от гонок: ответ старого запроса (быстрое листание недель) не должен перетирать новый
+  const requestIdRef = useRef(0);
 
   // Fetch Week Schedule
-  const fetchWeekSchedule = useCallback(async (monday) => {
+  const fetchWeekSchedule = useCallback(async (monday, options = {}) => {
+    const requestId = ++requestIdRef.current;
     const cached = getCachedWeek(monday);
     if (cached) {
       setScheduleData(cached);
@@ -43,24 +66,27 @@ export const SchedulePage = () => {
     }
     setError(null);
     try {
-      const data = await lkService.getScheduleWeek(monday);
-      if (Array.isArray(data) && data.length > 0) {
+      const data = await lkService.getScheduleWeek(monday, { forceRefresh: !!options.forceRefresh });
+      if (requestId !== requestIdRef.current) return;
+      if (Array.isArray(data)) {
         setScheduleData(data);
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent("app-schedule-updated"));
         }
       }
     } catch (err) {
+      if (requestId !== requestIdRef.current) return;
       if (!cached) {
         setError(err.message || 'Не удалось загрузить расписание недели');
       }
     } finally {
-      setIsLoading(false);
+      if (requestId === requestIdRef.current) setIsLoading(false);
     }
   }, []);
 
   // Fetch Month Schedule (using getScheduleRange from 1st of month to last of month)
-  const fetchMonthSchedule = useCallback(async (monthDate) => {
+  const fetchMonthSchedule = useCallback(async (monthDate, options = {}) => {
+    const requestId = ++requestIdRef.current;
     const year = monthDate.getFullYear();
     const month = monthDate.getMonth();
     const firstDay = new Date(year, month, 1);
@@ -79,16 +105,18 @@ export const SchedulePage = () => {
     setError(null);
 
     try {
-      const data = await lkService.getScheduleRange(from, to);
-      if (Array.isArray(data) && data.length > 0) {
+      const data = await lkService.getScheduleRange(from, to, { forceRefresh: !!options.forceRefresh });
+      if (requestId !== requestIdRef.current) return;
+      if (Array.isArray(data)) {
         setScheduleData(data);
       }
     } catch (err) {
+      if (requestId !== requestIdRef.current) return;
       if (!cached) {
         setError(err.message || 'Не удалось загрузить расписание на месяц');
       }
     } finally {
-      setIsLoading(false);
+      if (requestId === requestIdRef.current) setIsLoading(false);
     }
   }, []);
 
@@ -103,21 +131,12 @@ export const SchedulePage = () => {
 
   // Listen for mobile pull-to-refresh
   useEffect(() => {
+    // Кэш не удаляем: без сети он остаётся офлайн-копией (withOfflineFallback)
     const handlePullRefresh = () => {
       if (viewMode === 'week') {
-        const from = formatISODate(currentMonday);
-        const toDate = new Date(currentMonday);
-        toDate.setDate(currentMonday.getDate() + 6);
-        const to = formatISODate(toDate);
-        cacheService.remove(`schedule_${from}_${to}`);
-        fetchWeekSchedule(currentMonday);
+        fetchWeekSchedule(currentMonday, { forceRefresh: true });
       } else {
-        const year = currentMonthDate.getFullYear();
-        const month = currentMonthDate.getMonth();
-        const from = formatISODate(new Date(year, month, 1));
-        const to = formatISODate(new Date(year, month + 1, 0));
-        cacheService.remove(`schedule_${from}_${to}`);
-        fetchMonthSchedule(currentMonthDate);
+        fetchMonthSchedule(currentMonthDate, { forceRefresh: true });
       }
     };
 
@@ -128,12 +147,14 @@ export const SchedulePage = () => {
   // Days of current week (Mon - Sat)
   const weekDays = useMemo(() => {
     const days = [];
-    const dayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
-    for (let i = 0; i < 6; i++) {
+    const dayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+    for (let i = 0; i < 7; i++) {
       const d = new Date(currentMonday);
       d.setDate(currentMonday.getDate() + i);
       const iso = formatISODate(d);
       const hasLessons = scheduleData.some(day => day.title === iso && Array.isArray(day.data) && day.data.length > 0);
+      // Воскресенье показываем, только если в этот день реально есть занятия
+      if (i === 6 && !hasLessons) continue;
       days.push({
         iso,
         dayNumber: d.getDate(),
@@ -156,7 +177,8 @@ export const SchedulePage = () => {
 
     const result = [];
     let startDayOfWeek = firstDayOfMonth.getDay();
-    if (startDayOfWeek === 0) startDayOfWeek = 7; // Sunday -> 7
+    // Если 1-е число — воскресенье, месяц фактически начинается с пн 2-го: хвост прошлой недели не нужен
+    if (startDayOfWeek === 0) startDayOfWeek = 1;
 
     for (let i = 1; i < startDayOfWeek; i++) {
       const prevDate = new Date(year, month, 1 - (startDayOfWeek - i));
@@ -226,19 +248,32 @@ export const SchedulePage = () => {
     const prev = new Date(currentMonthDate);
     prev.setMonth(prev.getMonth() - 1);
     setCurrentMonthDate(prev);
-    setSelectedDateISO(formatISODate(prev));
+    setSelectedDateISO(formatISODate(skipSunday(prev)));
   };
 
   const handleNextMonth = () => {
     const next = new Date(currentMonthDate);
     next.setMonth(next.getMonth() + 1);
     setCurrentMonthDate(next);
-    setSelectedDateISO(formatISODate(next));
+    setSelectedDateISO(formatISODate(skipSunday(next)));
+  };
+
+  // При переключении вида синхронизируем неделю/месяц с выбранным днём,
+  // иначе после листания месяцев неделя показывает старые даты (и наоборот)
+  const handleToggleViewMode = () => {
+    const selected = parseISODateLocal(selectedDateISO);
+    if (viewMode === 'week') {
+      setCurrentMonthDate(new Date(selected.getFullYear(), selected.getMonth(), 1));
+      setViewMode('month');
+    } else {
+      setCurrentMonday(getMondayOfWeek(selected));
+      setViewMode('week');
+    }
   };
 
   // Jump to Today
   const handleToday = () => {
-    const now = new Date();
+    const now = defaultScheduleDay();
     setCurrentMonday(getMondayOfWeek(now));
     setCurrentMonthDate(new Date(now.getFullYear(), now.getMonth(), 1));
     setSelectedDateISO(formatISODate(now));
@@ -271,8 +306,9 @@ export const SchedulePage = () => {
         </div>
 
         {/* Row: [Сегодня]  [ < Дата-Дата / Месяц > ]  [ Месяц / Неделя ] - perfectly height-aligned */}
-        <div className="flex items-center space-x-2 shrink-0">
+        <div className="flex items-center gap-2 w-full sm:w-auto min-w-0">
           <button
+            type="button"
             onClick={handleToday}
             className="h-10 px-3.5 rounded-xl bg-card border border-border dark:border-[#2B3242] text-xs font-bold text-dark dark:text-white hover:bg-bg dark:hover:bg-[#262D3D] transition-colors shrink-0 flex items-center justify-center shadow-sm"
           >
@@ -280,20 +316,24 @@ export const SchedulePage = () => {
           </button>
 
           {/* Date Switcher */}
-          <div className="h-10 flex items-center bg-card border border-border dark:border-[#2B3242] rounded-xl p-1 shrink-0 shadow-sm">
+          <div className="h-10 flex flex-1 sm:flex-none min-w-0 items-center bg-card border border-border dark:border-[#2B3242] rounded-xl p-1 shadow-sm">
             <button
+              type="button"
               onClick={viewMode === 'week' ? handlePrevWeek : handlePrevMonth}
-              className="h-8 w-8 flex items-center justify-center rounded-lg hover:bg-bg dark:hover:bg-[#262D3D] transition-colors text-dark dark:text-white"
+              aria-label={viewMode === 'week' ? 'Предыдущая неделя' : 'Предыдущий месяц'}
+              className="h-8 w-8 shrink-0 flex items-center justify-center rounded-lg hover:bg-bg dark:hover:bg-[#262D3D] transition-colors text-dark dark:text-white"
               title={viewMode === 'week' ? 'Предыдущая неделя' : 'Предыдущий месяц'}
             >
               <Icons.ArrowLeft size={16} />
             </button>
-            <span className="px-3 text-xs font-bold text-dark dark:text-white tracking-wide select-none min-w-[120px] text-center">
+            <span className="flex-1 min-w-0 px-1 sm:px-3 text-[11px] sm:text-xs leading-tight font-bold text-dark dark:text-white sm:tracking-wide select-none sm:min-w-[120px] text-center">
               {viewMode === 'week' ? `${startWeekStr} — ${endWeekStr}` : capitalizedMonthStr}
             </span>
             <button
+              type="button"
               onClick={viewMode === 'week' ? handleNextWeek : handleNextMonth}
-              className="h-8 w-8 flex items-center justify-center rounded-lg hover:bg-bg dark:hover:bg-[#262D3D] transition-colors text-dark dark:text-white rotate-180"
+              aria-label={viewMode === 'week' ? 'Следующая неделя' : 'Следующий месяц'}
+              className="h-8 w-8 shrink-0 flex items-center justify-center rounded-lg hover:bg-bg dark:hover:bg-[#262D3D] transition-colors text-dark dark:text-white rotate-180"
               title={viewMode === 'week' ? 'Следующая неделя' : 'Следующий месяц'}
             >
               <Icons.ArrowLeft size={16} />
@@ -302,7 +342,9 @@ export const SchedulePage = () => {
 
           {/* Single View Mode Toggle Button */}
           <button
-            onClick={() => setViewMode(prev => prev === 'week' ? 'month' : 'week')}
+            type="button"
+            onClick={handleToggleViewMode}
+            aria-label={viewMode === 'week' ? 'Переключить вид на месяц' : 'Переключить вид на неделю'}
             className={`h-10 px-3 rounded-xl border text-xs font-bold transition-all shrink-0 flex items-center space-x-1.5 shadow-sm ${
               viewMode === 'month'
                 ? 'bg-primary text-white border-primary shadow-md'
@@ -311,14 +353,14 @@ export const SchedulePage = () => {
             title={viewMode === 'week' ? 'Переключить вид на месяц' : 'Переключить вид на неделю'}
           >
             <Icons.Calendar size={15} />
-            <span className="hidden xs:inline">{viewMode === 'week' ? 'Месяц' : 'Неделя'}</span>
+            <span className="hidden sm:inline">{viewMode === 'week' ? 'Месяц' : 'Неделя'}</span>
           </button>
         </div>
       </div>
 
       {/* VIEW MODE 1: WEEK VIEW */}
       {viewMode === 'week' && (
-        <div className="grid grid-cols-6 gap-2 w-full min-w-0">
+        <div className={`grid ${weekDays.length > 6 ? "grid-cols-7" : "grid-cols-6"} gap-1.5 sm:gap-2 w-full min-w-0`}>
           {weekDays.map(item => {
             const isSelected = item.iso === selectedDateISO;
             return (
@@ -397,7 +439,7 @@ export const SchedulePage = () => {
       {/* Selected Day Header */}
       <div className="flex items-center justify-between pt-1">
         <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted dark:text-[#8E98A8]">
-          Занятия на {new Date(selectedDateISO).toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}
+          Занятия на {parseISODateLocal(selectedDateISO).toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}
         </h3>
         {lessons.length > 0 && (
           <span className="text-xs font-bold text-secondary dark:text-[#38BDF8]">
@@ -412,7 +454,7 @@ export const SchedulePage = () => {
           <LoadingSpinner size={10} text="Получение расписания с сервера..." />
         </Card>
       ) : error ? (
-        <ErrorMessage message={error} onRetry={() => viewMode === 'week' ? fetchWeekSchedule(currentMonday) : fetchMonthSchedule(currentMonthDate)} />
+        <ErrorMessage message={error} onRetry={() => viewMode === 'week' ? fetchWeekSchedule(currentMonday, { forceRefresh: true }) : fetchMonthSchedule(currentMonthDate, { forceRefresh: true })} />
       ) : lessons.length === 0 ? (
         <Card className="p-12 text-center border border-border dark:border-[#2B3242]">
           <div className="w-14 h-14 rounded-full bg-accent/10 dark:bg-[#1E6685]/30 mx-auto flex items-center justify-center text-accent dark:text-[#38BDF8] mb-3">
@@ -426,13 +468,13 @@ export const SchedulePage = () => {
       ) : (
         <div className="space-y-3 w-full min-w-0">
           {lessons.map((lesson, idx) => (
-            <Card key={lesson.id || idx} className="p-4 sm:p-5 hover:border-accent dark:hover:border-[#38BDF8] transition-colors border border-border dark:border-[#2B3242] overflow-hidden w-full min-w-0 shadow-sm">
+            <Card key={`${lesson.isConsultation ? 'c' : 'l'}-${lesson.id ?? ''}-${idx}`} className="p-4 sm:p-5 hover:border-accent dark:hover:border-[#38BDF8] transition-colors border border-border dark:border-[#2B3242] overflow-hidden w-full min-w-0 shadow-sm">
               {/* Top row: Time badge on left, Lesson Type & Corps on right */}
               <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5 w-full min-w-0">
                 <div className="px-2.5 py-1 rounded-lg bg-primary/10 text-primary dark:text-[#38BDF8] font-bold text-xs sm:text-sm shrink-0">
                   {formatLessonTime(lesson) || "Пара"}
                 </div>
-                <div className="flex flex-wrap items-center justify-end gap-1.5 min-w-0 max-w-[60%] sm:max-w-none">
+                <div className="flex flex-wrap items-center justify-end gap-1.5 min-w-0 flex-1 basis-40">
                   {lesson.type && (
                     <Badge 
                       type={lesson.type === 'Консультация' ? 'secondary' : 'primary'}
@@ -443,8 +485,11 @@ export const SchedulePage = () => {
                     </Badge>
                   )}
                   {lesson.corps && (
-                    <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-bg dark:bg-[#181C26] text-textMuted dark:text-[#8E98A8] border border-border dark:border-[#2B3242] shrink-0">
-                      {lesson.corps}
+                    <span
+                      className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-bg dark:bg-[#181C26] text-textMuted dark:text-[#8E98A8] border border-border dark:border-[#2B3242] min-w-0 max-w-full truncate"
+                      title={asText(lesson.corps)}
+                    >
+                      {asText(lesson.corps)}
                     </span>
                   )}
                 </div>
@@ -452,7 +497,7 @@ export const SchedulePage = () => {
 
               {/* Middle row: Full Discipline Title */}
               <h4 className="text-base sm:text-lg font-bold text-dark dark:text-white leading-snug break-words">
-                {lesson.discipline || lesson.subject}
+                {asText(lesson.discipline) || asText(lesson.subject) || lesson.title || 'Учебное занятие'}
               </h4>
 
               {/* Bottom row: Auditory & Teacher */}
@@ -460,12 +505,12 @@ export const SchedulePage = () => {
                 <div className="mt-3 pt-2.5 border-t border-border dark:border-[#2B3242] flex flex-wrap items-center justify-between gap-2 text-xs text-textMuted dark:text-[#8E98A8]">
                   {lesson.auditory && (
                     <span className="font-semibold text-dark dark:text-white">
-                      Аудитория: {lesson.auditory}
+                      Аудитория: {asText(lesson.auditory)}
                     </span>
                   )}
                   {lesson.teacher && (
                     <span className="text-secondary dark:text-[#38BDF8] font-medium">
-                      {lesson.teacher}
+                      {asText(lesson.teacher)}
                     </span>
                   )}
                 </div>

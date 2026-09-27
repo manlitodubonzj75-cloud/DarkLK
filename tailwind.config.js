@@ -8,14 +8,14 @@ export default {
   theme: {
     extend: {
       colors: {
-        primary: 'var(--color-primary)',
-        secondary: 'var(--color-secondary)',
-        accent: 'var(--color-accent)',
-        dark: 'var(--color-dark)',
-        bg: 'var(--color-bg)',
-        card: 'var(--color-card)',
-        border: 'var(--color-border)',
-        textMuted: 'var(--color-text-muted)',
+        primary: 'rgb(var(--color-primary-rgb) / <alpha-value>)',
+        secondary: 'rgb(var(--color-secondary-rgb) / <alpha-value>)',
+        accent: 'rgb(var(--color-accent-rgb) / <alpha-value>)',
+        dark: 'rgb(var(--color-dark-rgb) / <alpha-value>)',
+        bg: 'rgb(var(--color-bg-rgb) / <alpha-value>)',
+        card: 'rgb(var(--color-card-rgb) / <alpha-value>)',
+        border: 'rgb(var(--color-border-rgb) / <alpha-value>)',
+        textMuted: 'rgb(var(--color-text-muted-rgb) / <alpha-value>)',
 
         // Фирменная тёмная палитра MSAL+
         charcoal: '#12151B',

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { lkService, formatISODate, getMondayOfWeek, cacheService } from '../../api';
 import { Card } from '../../components/common/Card';
 import { Icons } from '../../components/common/Icons';
@@ -27,6 +27,9 @@ export const ConsultationsPage = () => {
   const [loadingBookingData, setLoadingBookingData] = useState(false);
   const [isBooking, setIsBooking] = useState(false);
   const [bookMessage, setBookMessage] = useState({ text: '', type: '' });
+  // Счётчики запросов: ответ на старый выбор дисциплины/преподавателя не должен затирать новый
+  const teachersReqRef = useRef(0);
+  const slotsReqRef = useRef(0);
 
   // Optimal 21-day window for instant 1C backend responses (under 400ms)
   const [startDate] = useState(() => {
@@ -40,11 +43,11 @@ export const ConsultationsPage = () => {
   });
 
   // Load My Consultations / Отработки
-  const loadMyConsultations = useCallback(async () => {
+  const loadMyConsultations = useCallback(async (force = false) => {
     setLoadingMy(true);
     setErrorMy(null);
     try {
-      const data = await lkService.getMyConsultations(startDate, endDate);
+      const data = await lkService.getMyConsultations(startDate, endDate, { forceRefresh: force === true });
       const list = Array.isArray(data) ? data : [];
       // Keep any locally booked slots that might not yet be in server response
       setMyConsultations(prev => {
@@ -104,7 +107,7 @@ export const ConsultationsPage = () => {
   // Pull-to-refresh listener without wiping cache
   useEffect(() => {
     const handlePull = () => {
-      loadMyConsultations();
+      loadMyConsultations(true);
       loadDisciplinesAndThemes();
     };
     window.addEventListener("app-pull-to-refresh", handlePull);
@@ -114,11 +117,15 @@ export const ConsultationsPage = () => {
   // Load Teachers when Discipline changes
   const loadTeachers = useCallback(async (discId) => {
     if (!discId) return;
+    const reqId = ++teachersReqRef.current;
+    setTeachers([]);
     setLoadingBookingData(true);
     try {
       const data = await lkService.getDisciplineTeachers(discId);
+      if (reqId !== teachersReqRef.current) return;
       setTeachers(Array.isArray(data) ? data : []);
     } catch (err) {
+      if (reqId !== teachersReqRef.current) return;
       setBookMessage({ text: 'Ошибка загрузки преподавателей кафедры', type: 'error' });
     } finally {
       setLoadingBookingData(false);
@@ -131,6 +138,7 @@ export const ConsultationsPage = () => {
       setAvailableSlots([]);
       setSelectedTeacher('');
     } else {
+      teachersReqRef.current++;
       setTeachers([]);
       setSelectedTeacher('');
       setAvailableSlots([]);
@@ -139,11 +147,15 @@ export const ConsultationsPage = () => {
 
   // Load Slots when Teacher changes
   const loadSlots = useCallback(async (discId, teacherId, from, to) => {
+    const reqId = ++slotsReqRef.current;
+    setAvailableSlots([]);
     setLoadingBookingData(true);
     try {
       const data = await lkService.getConsultationsForDisciplineTeacher(discId, teacherId, from, to);
+      if (reqId !== slotsReqRef.current) return;
       setAvailableSlots(Array.isArray(data) ? data : []);
     } catch (err) {
+      if (reqId !== slotsReqRef.current) return;
       setBookMessage({ text: 'Ошибка загрузки свободных слотов', type: 'error' });
     } finally {
       setLoadingBookingData(false);
@@ -154,6 +166,7 @@ export const ConsultationsPage = () => {
     if (selectedDiscipline && selectedTeacher && startDate && endDate) {
       loadSlots(selectedDiscipline, selectedTeacher, startDate, endDate);
     } else {
+      slotsReqRef.current++;
       setAvailableSlots([]);
     }
   }, [selectedDiscipline, selectedTeacher, startDate, endDate, loadSlots]);
@@ -181,6 +194,7 @@ export const ConsultationsPage = () => {
   };
 
   const handleBook = async (slot) => {
+    if (isBooking) return;
     if (!selectedTheme) {
       setBookMessage({ text: 'Пожалуйста, выберите тему / причину отработки', type: 'error' });
       return;
@@ -189,9 +203,10 @@ export const ConsultationsPage = () => {
     setIsBooking(true);
     setBookMessage({ text: '', type: '' });
     try {
-      const disciplineObj = disciplines.find(d => d.id === selectedDiscipline);
-      const teacherObj = teachers.find(t => t.id === selectedTeacher);
-      const themeObj = themes.find(t => t.id === selectedTheme);
+      // value у <select> всегда строка, а id с сервера может прийти числом
+      const disciplineObj = disciplines.find(d => String(d.id) === String(selectedDiscipline));
+      const teacherObj = teachers.find(t => String(t.id) === String(selectedTeacher));
+      const themeObj = themes.find(t => String(t.id) === String(selectedTheme));
       
       const payload = {
         day: slot.day,
@@ -230,6 +245,12 @@ export const ConsultationsPage = () => {
 
       // Clear slots to prevent double booking
       setAvailableSlots(prev => prev.filter(s => s.startConsultation !== slot.startConsultation));
+      // ...и в кэше слотов, иначе занятый слот вернётся при повторном выборе преподавателя
+      const slotsKey = `consultations_${selectedDiscipline}_${selectedTeacher}_${startDate}_${endDate}`;
+      const cachedSlots = cacheService.get(slotsKey);
+      if (Array.isArray(cachedSlots)) {
+        cacheService.set(slotsKey, cachedSlots.filter(s => s.startConsultation !== slot.startConsultation));
+      }
     } catch (err) {
       setBookMessage({ text: err.message || 'Ошибка бронирования', type: 'error' });
     } finally {
@@ -251,6 +272,13 @@ export const ConsultationsPage = () => {
         startConsultation: slot.startConsultation
       });
       
+      // Убираем и из кэша ответа сервера (TTL 3 мин), иначе отменённая запись вернётся при обновлении
+      const myKey = `consultation_my_${startDate}_${endDate}`;
+      const cachedMy = cacheService.get(myKey);
+      if (Array.isArray(cachedMy)) {
+        cacheService.set(myKey, cachedMy.filter(item => item.startConsultation !== slot.startConsultation));
+      }
+
       // Remove locally immediately
       setMyConsultations(prev => {
         const updated = prev.filter(item => item.startConsultation !== slot.startConsultation);
@@ -274,11 +302,11 @@ export const ConsultationsPage = () => {
           Мои записи на отработку ({myConsultations.length})
         </h2>
         <button
-          onClick={loadMyConsultations}
+          onClick={() => loadMyConsultations(true)}
           disabled={loadingMy}
           className="text-xs font-semibold text-secondary dark:text-[#38BDF8] hover:underline flex items-center space-x-1"
         >
-          <Icons.RefreshCw size={13} className={loadingMy ? 'animate-spin' : ''} />
+          <Icons.Refresh size={13} className={loadingMy ? 'animate-spin' : ''} />
           <span>Обновить</span>
         </button>
       </div>
@@ -364,7 +392,8 @@ export const ConsultationsPage = () => {
                 <div className="mt-4 pt-3 border-t border-border dark:border-[#2B3242]">
                   <button 
                     onClick={() => handleCancel(item)}
-                    className="w-full py-2 text-xs font-bold text-rose-500 hover:text-rose-600 bg-rose-500/10 hover:bg-rose-500/20 rounded-xl transition-colors"
+                    disabled={loadingMy}
+                    className="w-full py-2 text-xs font-bold text-rose-500 hover:text-rose-600 bg-rose-500/10 hover:bg-rose-500/20 rounded-xl transition-colors disabled:opacity-50"
                   >
                     Отменить запись
                   </button>
@@ -412,7 +441,9 @@ export const ConsultationsPage = () => {
               disabled={loadingBookingData || disciplines.length === 0}
             >
               <option value="">
-                {disciplines.length === 0 ? '-- Дисциплины загружаются... --' : '-- Выберите дисциплину --'}
+                {disciplines.length === 0
+                  ? (loadingBookingData ? '-- Дисциплины загружаются... --' : '-- Нет доступных дисциплин --')
+                  : '-- Выберите дисциплину --'}
               </option>
               {disciplines.map(d => (
                 <option key={d.id} value={d.id}>{d.name}</option>
@@ -563,6 +594,13 @@ export const ConsultationsPage = () => {
         </div>
       </div>
 
+      {errorMy && (
+        <div className="p-4 rounded-2xl text-xs sm:text-sm font-bold border flex items-center space-x-2.5 bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-900/50 text-rose-700 dark:text-rose-300">
+          <Icons.AlertCircle size={18} className="shrink-0" />
+          <span className="min-w-0 break-words">{errorMy}</span>
+        </div>
+      )}
+
       {/* Dynamic Unified Layout:
           If bookings exist: Bookings block TOP -> Booking params block BOTTOM
           If NO bookings: Booking params block TOP -> Explanatory notice BOTTOM */}
@@ -577,7 +615,11 @@ export const ConsultationsPage = () => {
         <div className="space-y-8">
           {renderBookingBlock()}
           <div className="pt-2">
-            {renderEmptyNotice()}
+            {loadingMy ? (
+              <LoadingSpinner size={6} text="Загрузка ваших записей..." />
+            ) : (
+              renderEmptyNotice()
+            )}
           </div>
         </div>
       )}

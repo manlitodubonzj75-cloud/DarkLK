@@ -248,10 +248,12 @@ export async function parseBachelorProgress(
 
     if (!access) unadmittedCount++;
 
+    // Average only over modules that already have points (unfilled modules are 0, not a real score)
+    const filledModuleScores = moduleScores.filter((m) => m.score > 0);
     const avgGrade = discGrades.length > 0
       ? (discGrades.reduce((a, b) => a + b, 0) / discGrades.length).toFixed(2)
-      : (moduleScores.some((m) => m.score > 0)
-          ? (moduleScores.reduce((sum, m) => sum + m.score, 0) / moduleScores.length).toFixed(2)
+      : (filledModuleScores.length > 0
+          ? (filledModuleScores.reduce((sum, m) => sum + m.score, 0) / filledModuleScores.length).toFixed(2)
           : null);
 
     const totalBars = moduleScores.reduce((sum, m) => sum + m.score, 0);
@@ -281,7 +283,7 @@ export async function parseBachelorProgress(
   const overallGpa = allGrades.length > 0
     ? (allGrades.reduce((a, b) => a + b, 0) / allGrades.length).toFixed(2)
     : (allModuleScores.length > 0
-        ? (allModuleScores.reduce((sum, m) => sum + m.score, 0) / allModuleScores.length).toFixed(2)
+        ? (allModuleScores.reduce((sum, m) => sum + m, 0) / allModuleScores.length).toFixed(2)
         : (studentInfo?.reting ? String(studentInfo.reting) : "—"));
 
   const totalGradeDistribution = {};

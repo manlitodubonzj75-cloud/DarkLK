@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -6,7 +6,7 @@ import { Card } from '../../components/common/Card';
 import { Icons } from '../../components/common/Icons';
 import { LegalModal } from '../../components/common/LegalModal';
 import { updateService } from '../../api/updateService';
-import { getAppPlatform } from '../../api/updateService';
+import { getAppPlatform, APP_VERSION } from '../../api/updateService';
 
 function parsePrivacyBool(val) {
   if (typeof val === 'boolean') return val;
@@ -46,12 +46,34 @@ function resolveUserPrivacy(user) {
   return { showEmail, showPhoto, showMobile };
 }
 
+// Какие имена полей реально использует сервер — чтобы отправлять настройки в его же формате
+const PRIVACY_KEY_ALIASES = {
+  showEmail: ['showEmail', 'email', 'emailVisible'],
+  showPhoto: ['showPhoto', 'photo', 'photoVisible'],
+  showMobile: ['showMobile', 'mobile', 'phone', 'mobileVisible']
+};
+
+function buildPrivacyPayload(serverAccess, values) {
+  const base = serverAccess && typeof serverAccess === 'object' ? { ...serverAccess } : {};
+  for (const [logical, aliases] of Object.entries(PRIVACY_KEY_ALIASES)) {
+    const existing = aliases.find((k) => base[k] !== undefined);
+    const key = existing || logical;
+    const prev = base[key];
+    // Сохраняем тип, в котором сервер прислал значение (bool / 0-1 / строка)
+    if (typeof prev === 'number') base[key] = values[logical] ? 1 : 0;
+    else if (typeof prev === 'string') base[key] = values[logical] ? 'true' : 'false';
+    else base[key] = Boolean(values[logical]);
+  }
+  return base;
+}
+
 export const SettingsPage = () => {
   const { user, logout } = useAuth();
   const { isDark, toggleTheme } = useTheme();
   const navigate = useNavigate();
 
   const [privacy, setPrivacy] = useState(() => resolveUserPrivacy(user));
+  const serverAccessRef = useRef(null);
   const [savingPrivacy, setSavingPrivacy] = useState(false);
   const [legalModalTab, setLegalModalTab] = useState(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
@@ -116,8 +138,9 @@ export const SettingsPage = () => {
     async function fetchServerPrivacy() {
       try {
         const { studentService } = await import('../../api');
-        const access = await studentService.getAccessSettings();
+        const access = await studentService.getPrivacySettings();
         if (isMounted && access && typeof access === 'object') {
+          serverAccessRef.current = access;
           setPrivacy(resolveUserPrivacy({ accessSettings: access }));
         }
       } catch (err) {
@@ -136,12 +159,9 @@ export const SettingsPage = () => {
 
     try {
       const { studentService } = await import('../../api');
-      const payload = {
-        showEmail: key === 'showEmail' ? nextVal : privacy.showEmail,
-        showPhoto: key === 'showPhoto' ? nextVal : privacy.showPhoto,
-        showMobile: key === 'showMobile' ? nextVal : privacy.showMobile
-      };
-      await studentService.updateAccessSettings(payload);
+      const payload = buildPrivacyPayload(serverAccessRef.current, { ...privacy, [key]: nextVal });
+      await studentService.updatePrivacySettings(payload);
+      serverAccessRef.current = payload;
     } catch (err) {
       console.error('[SettingsPage] Failed to save privacy settings:', err);
       setPrivacy(previousState);
@@ -210,18 +230,18 @@ export const SettingsPage = () => {
 
       {/* Account Info Details */}
       <Card className="p-0 overflow-hidden divide-y divide-border">
-        <div className="p-4 flex justify-between items-center text-xs">
-          <span className="font-bold text-textMuted uppercase">Логин</span>
-          <span className="font-semibold text-dark">{user?.login || user?.username || '—'}</span>
+        <div className="p-4 flex justify-between items-center gap-3 text-xs">
+          <span className="font-bold text-textMuted uppercase shrink-0">Логин</span>
+          <span className="font-semibold text-dark min-w-0 break-all text-right">{user?.login || user?.username || '—'}</span>
         </div>
-        <div className="p-4 flex justify-between items-center text-xs">
-          <span className="font-bold text-textMuted uppercase">Корпоративный Email</span>
-          <span className="font-semibold text-secondary">{user?.emailCorporate || user?.email || '—'}</span>
+        <div className="p-4 flex justify-between items-center gap-3 text-xs">
+          <span className="font-bold text-textMuted uppercase shrink-0">Корпоративный Email</span>
+          <span className="font-semibold text-secondary min-w-0 break-all text-right">{user?.emailCorporate || user?.email || '—'}</span>
         </div>
         {user?.phones && user.phones.length > 0 && (
-          <div className="p-4 flex justify-between items-center text-xs">
-            <span className="font-bold text-textMuted uppercase">Телефон</span>
-            <span className="font-semibold text-dark">{user.phones.join(', ')}</span>
+          <div className="p-4 flex justify-between items-center gap-3 text-xs">
+            <span className="font-bold text-textMuted uppercase shrink-0">Телефон</span>
+            <span className="font-semibold text-dark min-w-0 break-words text-right">{user.phones.join(', ')}</span>
           </div>
         )}
       </Card>
@@ -246,7 +266,10 @@ export const SettingsPage = () => {
 
             <button
               onClick={toggleTheme}
-              className={`w-12 h-7 rounded-full p-1 transition-colors duration-150 ease-in-out ${
+              role="switch"
+              aria-checked={isDark}
+              aria-label="Тёмная тема"
+              className={`w-12 h-7 rounded-full p-1 transition-colors duration-150 ease-in-out shrink-0 ml-3 ${
                 isDark ? 'bg-secondary' : 'bg-gray-300 dark:bg-gray-700'
               }`}
             >
@@ -276,7 +299,10 @@ export const SettingsPage = () => {
 
             <button
               onClick={handleToggleMobileLayout}
-              className={`w-12 h-7 rounded-full p-1 transition-colors duration-150 ease-in-out shrink-0 ${
+              role="switch"
+              aria-checked={useSidebarNav}
+              aria-label="Боковое меню навигации"
+              className={`w-12 h-7 rounded-full p-1 transition-colors duration-150 ease-in-out shrink-0 ml-3 ${
                 useSidebarNav ? 'bg-secondary' : 'bg-gray-300 dark:bg-gray-700'
               }`}
             >
@@ -301,9 +327,12 @@ export const SettingsPage = () => {
             { key: 'showPhoto', label: 'Отображать мою фотографию в профиле' },
             { key: 'showMobile', label: 'Отображать номер телефона' }
           ].map(item => (
-            <div key={item.key} className="p-4 flex items-center justify-between">
+            <div key={item.key} className="p-4 flex items-center justify-between gap-3">
               <span className="text-xs sm:text-sm font-medium text-dark">{item.label}</span>
               <button
+                role="switch"
+                aria-checked={Boolean(privacy[item.key])}
+                aria-label={item.label}
                 disabled={savingPrivacy}
                 onClick={() => handleTogglePrivacy(item.key)}
                 className={`w-12 h-7 rounded-full p-1 transition-colors duration-150 ease-in-out shrink-0 ${
@@ -334,7 +363,7 @@ export const SettingsPage = () => {
               </div>
               <div>
                 <h4 className="text-sm font-bold text-dark">Текущая версия</h4>
-                <p className="text-xs text-textMuted">DarkMSAL v1.0.0 ({platformLabel})</p>
+                <p className="text-xs text-textMuted">DarkMSAL v{APP_VERSION} · {platformLabel}</p>
               </div>
             </div>
 
@@ -417,6 +446,20 @@ export const SettingsPage = () => {
           </button>
         </Card>
       </div>
+
+      {/* Userscript: вернуться к обычному интерфейсу ЛК (плавающая кнопка откроет DarkMSAL обратно) */}
+      {typeof window !== 'undefined' && window.__DARKMSAL_USERSCRIPT__ && (
+        <div className="pt-2">
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent('darkmsal-minimize'))}
+            className="w-full py-3 px-4 rounded-2xl bg-card hover:bg-bg border border-border text-dark font-bold text-sm transition-all flex items-center justify-center space-x-2"
+          >
+            <Icons.ArrowLeft size={18} />
+            <span>Открыть обычный ЛК</span>
+          </button>
+        </div>
+      )}
 
       {/* Logout Action */}
       <div className="pt-2">

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { lkService, formatDisplayDate, parseLessonDate, isPastDate, cacheService } from '../../api';
@@ -21,6 +21,21 @@ function getGradeStyle(grade) {
     default:
       return 'bg-slate-500/15 text-slate-600 dark:text-slate-400 border-slate-500/30';
   }
+}
+
+// 1 пара, 2 пары, 5 пар
+function pluralPairs(n) {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'пара';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'пары';
+  return 'пар';
+}
+
+// Старые кэши могли сохранить "NaN" как средний балл
+function safeAvg(val) {
+  if (val === null || val === undefined || val === '' || String(val) === 'NaN') return '—';
+  return val;
 }
 
 export const GradesPage = () => {
@@ -47,7 +62,7 @@ export const GradesPage = () => {
     semester: initialCached.activeSemester || Number(user?.semester || 1)
   } : null);
   const [semesterSummary, setSemesterSummary] = useState(() => initialCached ? {
-    avgScore: initialCached.gpa || '—',
+    avgScore: safeAvg(initialCached.gpa),
     isAdmitted: initialCached.isAdmitted !== undefined ? initialCached.isAdmitted : true,
     unadmittedCount: initialCached.unadmittedCount || 0,
     totalPasses: initialCached.passes !== undefined ? initialCached.passes : 0,
@@ -66,8 +81,13 @@ export const GradesPage = () => {
   const [isOfflineCached, setIsOfflineCached] = useState(false);
   const [error, setError] = useState(null);
 
+  // Guards against an older request (initial load vs pull-to-refresh) overwriting a newer one
+  const requestIdRef = useRef(0);
+
   // Load current active semester progress details via getProgressWithLessons
-  const loadGradesData = async () => {
+  const loadGradesData = async (opts) => {
+    const requestId = ++requestIdRef.current;
+    const forceRefresh = opts?.forceRefresh === true;
     const cachedData = getCachedProgress();
     if (cachedData && Array.isArray(cachedData.disciplines) && cachedData.disciplines.length > 0) {
       setDisciplines(cachedData.disciplines);
@@ -76,7 +96,7 @@ export const GradesPage = () => {
         semester: cachedData.activeSemester
       });
       setSemesterSummary({
-        avgScore: cachedData.gpa || '—',
+        avgScore: safeAvg(cachedData.gpa),
         isAdmitted: cachedData.isAdmitted !== undefined ? cachedData.isAdmitted : true,
         unadmittedCount: cachedData.unadmittedCount || 0,
         totalPasses: cachedData.passes !== undefined ? cachedData.passes : 0,
@@ -87,8 +107,10 @@ export const GradesPage = () => {
     }
 
     try {
-      const data = await lkService.getProgressWithLessons(user);
+      const data = await lkService.getProgressWithLessons(user, forceRefresh ? { forceRefresh: true } : {});
+      if (requestId !== requestIdRef.current) return;
 
+      setError(null);
       if (data && Array.isArray(data.disciplines) && data.disciplines.length > 0) {
         setDisciplines(data.disciplines);
         setCurrentSemesterInfo({
@@ -96,7 +118,7 @@ export const GradesPage = () => {
           semester: data.activeSemester
         });
         setSemesterSummary({
-          avgScore: data.gpa || '—',
+          avgScore: safeAvg(data.gpa),
           isAdmitted: data.isAdmitted !== undefined ? data.isAdmitted : true,
           unadmittedCount: data.unadmittedCount || 0,
           totalPasses: data.passes !== undefined ? data.passes : 0,
@@ -108,26 +130,23 @@ export const GradesPage = () => {
         setDisciplines([]);
       }
     } catch (err) {
+      if (requestId !== requestIdRef.current) return;
       if (cachedData) {
         setIsOfflineCached(true);
       } else {
         setError(err.message || 'Не удалось загрузить данные об успеваемости');
       }
     } finally {
-      setIsLoading(false);
+      if (requestId === requestIdRef.current) setIsLoading(false);
     }
   };
 
   useEffect(() => {
     loadGradesData();
 
+    // Force a network refresh (bypassing TTL) instead of wiping caches, so offline data survives
     const handlePull = () => {
-      const activeCourse = Number(user?.course || 1);
-      const activeSem = Number(user?.semester || 1);
-      cacheService.remove(`progress_with_lessons_c${activeCourse}_s${activeSem}`);
-      cacheService.remove("progress_with_lessons_latest");
-      cacheService.remove("progress_list");
-      loadGradesData();
+      loadGradesData({ forceRefresh: true });
     };
 
     window.addEventListener("app-pull-to-refresh", handlePull);
@@ -148,7 +167,7 @@ export const GradesPage = () => {
             <span>Официальный сайт МГЮА недоступен. Отображаются сохранённые данные из локального кэша.</span>
           </div>
           <button
-            onClick={loadGradesData}
+            onClick={() => loadGradesData({ forceRefresh: true })}
             className="px-3 py-1 bg-amber-200/60 dark:bg-[#4A3323] rounded-xl font-bold hover:opacity-80 transition-opacity"
           >
             Обновить
@@ -196,7 +215,7 @@ export const GradesPage = () => {
           </div>
 
           {semesterSummary.totalGradesCount > 0 && (
-            <div className="flex items-center space-x-2 mt-3 pt-3 border-t border-border/60 dark:border-[#2B3242] text-xs">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mt-3 pt-3 border-t border-border/60 dark:border-[#2B3242] text-xs">
               <span className="text-textMuted dark:text-[#8E98A8] font-medium">Всего оценок: {semesterSummary.totalGradesCount}</span>
               <div className="flex items-center space-x-1 ml-auto">
                 {[5, 4, 3, 2].map(g => {
@@ -263,7 +282,7 @@ export const GradesPage = () => {
           <LoadingSpinner size={10} text="Получение текущих оценок и баллов..." />
         </Card>
       ) : error ? (
-        <ErrorMessage message={error} onRetry={loadGradesData} />
+        <ErrorMessage message={error} onRetry={() => loadGradesData({ forceRefresh: true })} />
       ) : disciplines.length === 0 ? (
         <Card className="p-12 text-center dark:bg-[#1F2430] dark:border-[#2B3242]">
           <div className="w-16 h-16 rounded-full bg-accent/10 dark:bg-[#22869A]/20 mx-auto flex items-center justify-center text-accent dark:text-[#22869A] mb-4">
@@ -273,7 +292,9 @@ export const GradesPage = () => {
             Нет данных об успеваемости за {currentSemesterInfo ? `${currentSemesterInfo.semester} семестр` : 'текущий семестр'}
           </h3>
           <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-1">
-            Текущие баллы БАРС и оценки отображаются по мере внесения преподавателями.
+            {isCollege
+              ? 'Оценки и посещаемость отображаются по мере внесения преподавателями.'
+              : 'Текущие баллы БАРС и оценки отображаются по мере внесения преподавателями.'}
           </p>
         </Card>
       ) : (
@@ -382,7 +403,7 @@ export const GradesPage = () => {
                     {/* Absence Tag */}
                     {disc.passes > 0 && (
                       <div className="flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-amber-50 dark:bg-[#34251B] text-amber-700 dark:text-[#E5983A] border border-amber-200 dark:border-[#4A3323] text-xs font-semibold ml-auto">
-                        <span>{isCollege ? `Пропущено: ${disc.passes} пар` : `Пропуски: ${disc.passes}`}</span>
+                        <span>{isCollege ? `Пропущено: ${disc.passes} ${pluralPairs(disc.passes)}` : `Пропуски: ${disc.passes}`}</span>
                       </div>
                     )}
                   </div>
@@ -480,7 +501,7 @@ export const GradesPage = () => {
                       <div key={mIdx} className="p-3.5 bg-bg dark:bg-[#181C26] rounded-xl border border-border dark:border-[#2B3242] space-y-2.5">
                         <div className="flex justify-between items-center text-xs font-bold">
                           <span className="text-dark dark:text-white">{mod.module || `Модуль ${mIdx + 1}`}</span>
-                          <span className="text-secondary dark:text-[#38BDF8]">{mod.mediumScore || 0} баллов</span>
+                          <span className="text-secondary dark:text-[#38BDF8] shrink-0">{disc.moduleScores?.[mIdx]?.score ?? (mod.mediumScore || 0)} б.</span>
                         </div>
                         {Array.isArray(mod.themes) && mod.themes.map((theme, tIdx) => (
                           <div key={tIdx} className="text-xs pl-2.5 border-l-2 border-border/80 dark:border-[#2B3242] space-y-1.5">

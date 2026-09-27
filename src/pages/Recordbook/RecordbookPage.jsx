@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { lkService, formatDisplayDate, cacheService, filterSemesterProgress } from '../../api';
 import { Card } from '../../components/common/Card';
@@ -41,7 +41,11 @@ const getGradeBadge = (gradeStr = '') => {
   if (g === '3' || g === 'удовлетворительно' || g === 'удовл.') {
     return { type: 'warning', text: gradeStr };
   }
-  if (g === '2' || g === 'неудовлетворительно' || g === 'не зачтено' || g === 'незачет') {
+  if (
+    g === '2' || g === 'неудовлетворительно' || g === 'неудовл.' ||
+    g === 'не зачтено' || g === 'незачтено' || g === 'незачет' || g === 'незачёт' ||
+    g === 'не зачет' || g === 'не зачёт' || g === 'неявка'
+  ) {
     return { type: 'danger', text: gradeStr };
   }
   return { type: 'secondary', text: gradeStr };
@@ -105,7 +109,10 @@ const getExamDateInfo = (dateStr) => {
     let d = null;
     if (/^\d{2}\.\d{2}\.\d{4}$/.test(dateStr)) {
       const [dd, mm, yyyy] = dateStr.split('.');
-      d = new Date(`${yyyy}-${mm}-${dd}`);
+      // Local midnight: new Date('YYYY-MM-DD') is parsed as UTC and shifts the day west of UTC
+      d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+    } else if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      d = new Date(`${dateStr}T00:00:00`);
     } else {
       d = new Date(dateStr);
     }
@@ -186,18 +193,23 @@ export const RecordbookPage = () => {
     return Math.ceil(selectedSemester / 2);
   }, [selectedSemester, currentCourse]);
 
+  // Cached progress strictly for the given semester ('latest' only if it IS that semester)
+  const getCachedSemesterProgress = (sem) => {
+    const c = Math.ceil((sem || 1) / 2);
+    const latest = cacheService.get('progress_with_lessons_latest');
+    const cached = cacheService.get(`progress_${c}_${sem}`) ||
+                   cacheService.get(`progress_with_lessons_c${c}_s${sem}`) ||
+                   (latest && Number(latest.activeSemester) === Number(sem) ? latest : null);
+    if (!cached) return [];
+    return filterSemesterProgress(cached.disciplines || cached, c, sem) || [];
+  };
+
   // Progress disciplines state for current semester
-  const [progressDisciplines, setProgressDisciplines] = useState(() => {
-    const c = Math.ceil((selectedSemester || 1) / 2);
-    const cached = cacheService.get(`progress_${c}_${selectedSemester}`) ||
-                   cacheService.get(`progress_with_lessons_c${c}_s${selectedSemester}`) ||
-                   cacheService.get('progress_with_lessons_latest');
-    if (cached) {
-      const list = filterSemesterProgress(cached.disciplines || cached, c, selectedSemester);
-      return list || [];
-    }
-    return [];
-  });
+  const [progressDisciplines, setProgressDisciplines] = useState(() => getCachedSemesterProgress(selectedSemester));
+
+  // Always-current values for async handlers registered once (pull-to-refresh)
+  const selectedSemesterRef = useRef(selectedSemester);
+  selectedSemesterRef.current = selectedSemester;
 
   const [isLoading, setIsLoading] = useState(() => !initialRecordbook || !initialRecordbook.length);
   const [error, setError] = useState(null);
@@ -210,15 +222,10 @@ export const RecordbookPage = () => {
       if (!selectedSemester) return;
       const c = Math.ceil(selectedSemester / 2);
 
-      // Check cache first
-      const cached = cacheService.get(`progress_${c}_${selectedSemester}`) ||
-                     cacheService.get(`progress_with_lessons_c${c}_s${selectedSemester}`) ||
-                     cacheService.get('progress_with_lessons_latest');
-      if (cached) {
-        const filtered = filterSemesterProgress(cached.disciplines || cached, c, selectedSemester);
-        if (filtered && filtered.length > 0 && !isCancelled) {
-          setProgressDisciplines(filtered);
-        }
+      // Check cache first; reset to this semester's data (or empty) so the previous
+      // semester's disciplines are never shown under the newly selected semester
+      if (!isCancelled) {
+        setProgressDisciplines(getCachedSemesterProgress(selectedSemester));
       }
 
       try {
@@ -300,27 +307,36 @@ export const RecordbookPage = () => {
     return rawRecordbook.filter(entry => hasValidGrade(entry.grade || entry.mark));
   }, [rawRecordbook]);
 
-  const loadRecordbookData = async () => {
-    const hasCached = Array.isArray(rawRecordbook) && rawRecordbook.length > 0;
+  const loadRecordbookData = async (opts) => {
+    const forceRefresh = opts?.forceRefresh === true;
+    const fetchOpts = forceRefresh ? { forceRefresh: true } : {};
+    // Read the semester at call time: this handler is registered once, so closure values go stale
+    const sem = selectedSemesterRef.current;
+    const course = Math.ceil((sem || 1) / 2);
+    const cachedRecordbook = cacheService.get('recordbook');
+    const hasCached = Array.isArray(cachedRecordbook) && cachedRecordbook.length > 0;
     if (!hasCached) {
       setIsLoading(true);
     }
     setError(null);
     try {
       const [recordbookResp, studentInfoResp, progressResp] = await Promise.allSettled([
-        lkService.getRecordbook(),
-        lkService.getStudentInfo(),
-        lkService.getProgress(selectedCourse, selectedSemester),
+        lkService.getRecordbook(fetchOpts),
+        lkService.getStudentInfo(fetchOpts),
+        lkService.getProgress(course, sem, fetchOpts),
       ]);
 
       if (recordbookResp.status === 'fulfilled' && Array.isArray(recordbookResp.value)) {
         setRawRecordbook(recordbookResp.value);
+      } else if (recordbookResp.status === 'rejected' && !hasCached) {
+        setError(recordbookResp.reason?.message || 'Не удалось загрузить данные зачётной книжки');
       }
       if (studentInfoResp.status === 'fulfilled' && studentInfoResp.value) {
         setStudentInfo(studentInfoResp.value);
       }
-      if (progressResp.status === 'fulfilled' && progressResp.value) {
-        const filtered = filterSemesterProgress(progressResp.value, selectedCourse, selectedSemester);
+      // Ignore the response if the user switched semester while it was loading
+      if (progressResp.status === 'fulfilled' && progressResp.value && selectedSemesterRef.current === sem) {
+        const filtered = filterSemesterProgress(progressResp.value, course, sem);
         if (filtered && filtered.length > 0) {
           setProgressDisciplines(filtered);
         }
@@ -336,7 +352,7 @@ export const RecordbookPage = () => {
     loadRecordbookData();
 
     const handlePull = () => {
-      loadRecordbookData();
+      loadRecordbookData({ forceRefresh: true });
     };
     window.addEventListener('app-pull-to-refresh', handlePull);
     return () => window.removeEventListener('app-pull-to-refresh', handlePull);
@@ -435,7 +451,7 @@ export const RecordbookPage = () => {
           <LoadingSpinner size={10} text="Загрузка зачётной книжки..." />
         </Card>
       ) : error ? (
-        <ErrorMessage message={error} onRetry={loadRecordbookData} />
+        <ErrorMessage message={error} onRetry={() => loadRecordbookData({ forceRefresh: true })} />
       ) : !viewAllRecordbook ? (
         /* Semester-specific Disciplines */
         currentSemesterDisciplines.length === 0 ? (
@@ -459,7 +475,7 @@ export const RecordbookPage = () => {
               const isPassed = Boolean(gradeInfo);
 
               return (
-                <Card key={entry.guid || entry.id || idx} className="p-4 sm:p-5 dark:bg-[#1F2430] dark:border-[#2B3242]">
+                <Card key={`${entry.guid || entry.id || ''}-${entry.semester || ''}-${entry.type || ''}-${idx}`} className="p-4 sm:p-5 dark:bg-[#1F2430] dark:border-[#2B3242]">
                   <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
                     <div className="flex-1 min-w-[200px]">
                       <h3 className="font-bold text-base sm:text-lg text-dark dark:text-white">
@@ -539,7 +555,7 @@ export const RecordbookPage = () => {
               const controlInfo = getControlTypeInfo(entry.type);
 
               return (
-                <Card key={entry.guid || entry.id || idx} className="p-4 dark:bg-[#1F2430] dark:border-[#2B3242]">
+                <Card key={`${entry.guid || entry.id || ''}-${entry.semester || ''}-${entry.type || ''}-${idx}`} className="p-4 dark:bg-[#1F2430] dark:border-[#2B3242]">
                   <div className="flex items-start justify-between gap-2 mb-1">
                     <div>
                       <h4 className="font-bold text-base text-dark dark:text-white">{entry.discipline || entry.name}</h4>

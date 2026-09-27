@@ -2,29 +2,43 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Цветовые переменные темы */
+/* Цветовые переменные темы. *-rgb — каналы для Tailwind-модификаторов прозрачности (bg-primary/10 и т.п.) */
 :root {
   --color-primary: #22869A;
+  --color-primary-rgb: 34 134 154;
   --color-secondary: #036495;
+  --color-secondary-rgb: 3 100 149;
   --color-accent: #1E6685;
+  --color-accent-rgb: 30 102 133;
   --color-dark: #1E293B;
+  --color-dark-rgb: 30 41 59;
   --color-bg: #F8FAFC;
+  --color-bg-rgb: 248 250 252;
   --color-card: #FFFFFF;
+  --color-card-rgb: 255 255 255;
   --color-border: #E2E8F0;
+  --color-border-rgb: 226 232 240;
   --color-text-muted: #64748B;
-}
+  --color-text-muted-rgb: 100 116 139;}
 
 /* Новая палитра для тёмной темы (Charcoal Main, Slate Panel, Accent Cyan-Blue) */
 .dark {
   --color-primary: #22869A;
+  --color-primary-rgb: 34 134 154;
   --color-secondary: #38BDF8;
+  --color-secondary-rgb: 56 189 248;
   --color-accent: #1E6685;
+  --color-accent-rgb: 30 102 133;
   --color-dark: #FFFFFF;
+  --color-dark-rgb: 255 255 255;
   --color-bg: #12151B;
+  --color-bg-rgb: 18 21 27;
   --color-card: #1F2430;
+  --color-card-rgb: 31 36 48;
   --color-border: #2B3242;
+  --color-border-rgb: 43 50 66;
   --color-text-muted: #8E98A8;
-}
+  --color-text-muted-rgb: 142 152 168;}
 
 body {
   margin: 0;
@@ -34,6 +48,10 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
+}
+
+.dark {
+  color-scheme: dark;
 }
 
 .dark body {

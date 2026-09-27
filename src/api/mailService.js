@@ -74,6 +74,8 @@ export const mailService = {
    */
   async getFolders() {
     return await cacheService.withOfflineFallback('mail_folders', async () => {
+      // Порядок важен: GetFolder отвечает в том же порядке, а DistinguishedFolderId в ответе не приходит
+      const requestedIds = ['inbox', 'sentitems', 'drafts', 'deleteditems', 'junkemail'];
       const payload = {
         __type: 'GetFolderJsonRequest:#Exchange',
         Header: {
@@ -86,13 +88,7 @@ export const mailService = {
             __type: 'FolderResponseShape:#Exchange',
             BaseShape: 'Default'
           },
-          FolderIds: [
-            { __type: 'DistinguishedFolderId:#Exchange', Id: 'inbox' },
-            { __type: 'DistinguishedFolderId:#Exchange', Id: 'sentitems' },
-            { __type: 'DistinguishedFolderId:#Exchange', Id: 'drafts' },
-            { __type: 'DistinguishedFolderId:#Exchange', Id: 'deleteditems' },
-            { __type: 'DistinguishedFolderId:#Exchange', Id: 'junkemail' }
-          ]
+          FolderIds: requestedIds.map((Id) => ({ __type: 'DistinguishedFolderId:#Exchange', Id }))
         }
       };
 
@@ -100,9 +96,11 @@ export const mailService = {
         const res = await mailClient.serviceCall('GetFolder', payload);
         const items = res?.Body?.ResponseMessages?.Items || [];
 
-        return items.map((it) => {
-          const folder = it.Folders?.[0] || {};
-          const distinguishedId = folder.DistinguishedFolderId || folder.FolderId?.Id;
+        return items.map((it, idx) => {
+          const folder = it.Folders?.[0];
+          // Папка не найдена / ошибка по конкретному id — пропускаем, чтобы не было пустых кнопок
+          if (!folder) return null;
+          const distinguishedId = folder.DistinguishedFolderId || requestedIds[idx] || folder.FolderId?.Id;
           const displayName = folder.DisplayName;
           const totalCount = folder.TotalCount || 0;
           const unreadCount = folder.UnreadCount || 0;
@@ -143,16 +141,12 @@ export const mailService = {
             totalCount,
             icon
           };
-        });
+        }).filter(Boolean);
       } catch (err) {
-        console.warn('[MailService] Failed to load folder metadata dynamically, returning defaults:', err.message);
-        return [
-          { id: 'inbox', name: 'Входящие', unreadCount: 0, totalCount: 0, icon: 'Inbox' },
-          { id: 'sentitems', name: 'Отправленные', unreadCount: 0, totalCount: 0, icon: 'Send' },
-          { id: 'drafts', name: 'Черновики', unreadCount: 0, totalCount: 0, icon: 'FileText' },
-          { id: 'deleteditems', name: 'Удалённые', unreadCount: 0, totalCount: 0, icon: 'Trash2' },
-          { id: 'junkemail', name: 'Спам', unreadCount: 0, totalCount: 0, icon: 'AlertOctagon' }
-        ];
+        // Пробрасываем, чтобы withOfflineFallback отдал закэшированные папки со счётчиками,
+        // а не перезаписал кэш нулями (MailPage и так стартует со списком папок по умолчанию)
+        console.warn('[MailService] Failed to load folder metadata:', err.message);
+        throw err;
       }
     });
   },
@@ -326,12 +320,14 @@ export const mailService = {
   async getConversations({ folderId = 'inbox', offset = 0, limit = 50 } = {}) {
     const cacheKey = `mail_convs_${folderId}`;
     return await cacheService.withOfflineFallback(cacheKey, async () => {
+      let convErr = null;
       try {
         const convs = await this.getConversationsByFindConversation({ folderId, offset, limit });
         if (Array.isArray(convs) && convs.length > 0) {
           return convs;
         }
       } catch (err) {
+        convErr = err;
         console.warn('[MailService] FindConversation error, trying FindItem fallback:', err.message);
       }
 
@@ -339,6 +335,9 @@ export const mailService = {
         return await this.getItemsByFindItem({ folderId, offset, limit });
       } catch (err2) {
         console.warn('[MailService] FindItem fallback also failed:', err2.message);
+        // Оба запроса упали (нет сети / сессия) — пробрасываем, чтобы показать кэш или ошибку,
+        // а не затереть кэш пустым списком. Пустой FindConversation + упавший FindItem = пустая папка.
+        if (convErr) throw convErr;
         return [];
       }
     });
@@ -507,13 +506,27 @@ export const mailService = {
    * Send new email
    */
   async sendEmail({ to, subject, body, isHtml = true }) {
-    const toRecipients = Array.isArray(to) ? to : [to];
+    // Поле «Кому» может содержать несколько адресов через запятую / точку с запятой
+    const toRecipients = (Array.isArray(to) ? to : String(to || '').split(/[,;]/))
+      .map((email) => String(email || '').trim())
+      .filter(Boolean);
+    if (toRecipients.length === 0) {
+      throw new Error('Укажите адрес получателя');
+    }
     const toAddresses = toRecipients.map((email) => ({
       Mailbox: {
         __type: 'EmailAddressType:#Exchange',
-        EmailAddress: email.trim()
+        EmailAddress: email
       }
     }));
+    // Текст из формы — всегда простой текст: экранируем, иначе «<email>» в цитате ответа
+    // съедается как тег, а переносы строк теряются
+    const plainBody = String(body || '');
+    const escapedBody = plainBody
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\n/g, '<br/>');
 
     const payload = {
       __type: 'CreateItemJsonRequest:#Exchange',
@@ -538,7 +551,7 @@ export const mailService = {
             Body: {
               __type: 'BodyContentType:#Exchange',
               BodyType: isHtml ? 'HTML' : 'Text',
-              Value: isHtml ? (body.includes('<') ? body : `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px;">${body.replace(/\n/g, '<br/>')}</div>`) : (body || '')
+              Value: isHtml ? `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px;">${escapedBody}</div>` : plainBody
             },
             ToRecipients: toAddresses
           }

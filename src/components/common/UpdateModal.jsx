@@ -98,7 +98,7 @@ export const UpdateModal = ({ isOpen, updateInfo, onClose }) => {
             </h4>
           )}
           
-          <div className="max-h-48 overflow-y-auto p-3.5 rounded-2xl bg-bg dark:bg-[#12151B] border border-border/70 dark:border-[#283245] text-xs text-text dark:text-[#E2E8F0] space-y-1 font-sans leading-relaxed">
+          <div className="max-h-48 overflow-y-auto p-3.5 rounded-2xl bg-bg dark:bg-[#12151B] border border-border/70 dark:border-[#283245] text-xs text-dark dark:text-[#E2E8F0] space-y-1 font-sans leading-relaxed">
             {releaseNotes ? (
               <pre className="whitespace-pre-wrap font-sans text-xs break-words">
                 {releaseNotes}

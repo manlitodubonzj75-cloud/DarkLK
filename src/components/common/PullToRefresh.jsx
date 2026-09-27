@@ -13,6 +13,7 @@ export const PullToRefresh = ({ children, onRefresh }) => {
   const [pullDistance, setPullDistance] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const startY = useRef(0);
+  const startX = useRef(0);
   const currentY = useRef(0);
   const isDragging = useRef(false);
   const containerRef = useRef(null);
@@ -32,6 +33,20 @@ export const PullToRefresh = ({ children, onRefresh }) => {
     );
   };
 
+  // Touch started inside a nested scrollable element that is not at its top (inner lists)
+  const isInsideScrolledChild = (target) => {
+    const container = containerRef.current;
+    let el = target instanceof Element ? target : null;
+    while (el && el !== container) {
+      if (el.scrollTop > 0) {
+        const oy = window.getComputedStyle(el).overflowY;
+        if (oy === 'auto' || oy === 'scroll') return true;
+      }
+      el = el.parentElement;
+    }
+    return false;
+  };
+
   const handleTouchStart = (e) => {
     if (isRefreshing) return;
 
@@ -45,7 +60,9 @@ export const PullToRefresh = ({ children, onRefresh }) => {
     // Only activate if we are scrolled to the very top
     if (scrollElem && scrollElem.scrollTop > 2) return;
     if (window.scrollY > 2) return;
+    if (isInsideScrolledChild(e.target)) return;
 
+    startX.current = e.touches[0].clientX;
     startY.current = e.touches[0].clientY;
     currentY.current = e.touches[0].clientY;
     isDragging.current = true;
@@ -72,6 +89,15 @@ export const PullToRefresh = ({ children, onRefresh }) => {
 
     currentY.current = e.touches[0].clientY;
     const diff = currentY.current - startY.current;
+    const diffX = e.touches[0].clientX - startX.current;
+
+    // Horizontal swipe (day pickers, tables, carousels) — not a pull-to-refresh gesture
+    if (Math.abs(diffX) > Math.abs(diff) && Math.abs(diffX) > 8) {
+      isDragging.current = false;
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      setPullDistance(0);
+      return;
+    }
 
     if (diff > 8) {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -126,6 +152,12 @@ export const PullToRefresh = ({ children, onRefresh }) => {
     }
   };
 
+  const handleTouchCancel = () => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    isDragging.current = false;
+    if (!isRefreshing) setPullDistance(0);
+  };
+
   // Expose manual trigger via window event for desktop / shortcuts
   useEffect(() => {
     const handleTrigger = () => {
@@ -144,6 +176,7 @@ export const PullToRefresh = ({ children, onRefresh }) => {
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchCancel}
       className="relative w-full h-full overflow-y-auto overflow-x-hidden flex-1"
       style={{ WebkitOverflowScrolling: 'touch', overscrollBehaviorY: 'contain' }}
     >
@@ -174,7 +207,9 @@ export const PullToRefresh = ({ children, onRefresh }) => {
       {/* Main Page Children Content */}
       <div
         style={{
-          transform: `translateY(${pullDistance * 0.4}px)`,
+          // transform: none в покое — иначе обёртка становится containing block для position: fixed
+          // и модальные окна страниц позиционируются относительно контента, а не экрана
+          transform: pullDistance > 0 ? `translateY(${pullDistance * 0.4}px)` : 'none',
           transition: isDragging.current ? 'none' : 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)'
         }}
         className="w-full min-h-full"

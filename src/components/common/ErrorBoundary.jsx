@@ -10,6 +10,34 @@ export class ErrorBoundary extends React.Component {
     return { hasError: true, error };
   }
 
+  componentDidMount() {
+    // Сбрасываем экран ошибки при навигации (кнопка «Назад», аппаратная кнопка Android)
+    window.addEventListener('hashchange', this.handleLocationChange);
+    window.addEventListener('popstate', this.handleLocationChange);
+  }
+
+  componentWillUnmount() {
+    window.removeEventListener('hashchange', this.handleLocationChange);
+    window.removeEventListener('popstate', this.handleLocationChange);
+  }
+
+  handleLocationChange = () => {
+    if (this.state.hasError) {
+      this.setState({ hasError: false, error: null, errorInfo: null });
+    }
+  };
+
+  // Перезагрузка на той же сломанной странице (HashRouter хранит маршрут в #) снова падает —
+  // уходим на главную и перезагружаем
+  handleReload = () => {
+    try {
+      if (window.location.hash && window.location.hash !== '#/') {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search + '#/');
+      }
+    } catch (_) {}
+    window.location.reload();
+  };
+
   componentDidCatch(error, errorInfo) {
     console.error('ErrorBoundary caught an error:', error, errorInfo);
     this.setState({ error, errorInfo });
@@ -29,7 +57,8 @@ export class ErrorBoundary extends React.Component {
       const stack = this.state.error?.stack || this.state.errorInfo?.componentStack;
 
       return (
-        <div className="min-h-screen flex items-center justify-center p-6 bg-[#12151B] text-white">
+        <div className="h-full w-full overflow-y-auto bg-[#12151B] text-white">
+        <div className="min-h-full flex items-center justify-center p-6 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
           <div className="max-w-md w-full bg-[#1F2430] border border-[#2B3242] rounded-2xl p-6 text-center shadow-xl">
             <div className="w-14 h-14 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center mx-auto mb-4">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -60,7 +89,7 @@ export class ErrorBoundary extends React.Component {
 
             <div className="space-y-3">
               <button
-                onClick={() => window.location.reload()}
+                onClick={this.handleReload}
                 className="w-full py-2.5 px-4 bg-[#22869A] hover:bg-[#1E6685] rounded-xl font-semibold text-sm transition-all"
               >
                 Перезагрузить страницу
@@ -73,6 +102,7 @@ export class ErrorBoundary extends React.Component {
               </button>
             </div>
           </div>
+        </div>
         </div>
       );
     }

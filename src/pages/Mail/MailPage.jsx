@@ -65,6 +65,16 @@ export const MailPage = () => {
   const [showRecipientDropdown, setShowRecipientDropdown] = useState(false);
   const searchDebounceRef = useRef(null);
   const recipientInputWrapperRef = useRef(null);
+  const [listError, setListError] = useState(null);
+  const [downloadingAttId, setDownloadingAttId] = useState(null);
+  // Защита от гонок: учитываем только ответ на последний запрос списка / письма / поиска
+  const listReqRef = useRef(0);
+  const detailReqRef = useRef(0);
+  const recipientReqRef = useRef(0);
+  const selectedConvRef = useRef(null);
+  selectedConvRef.current = selectedConversation;
+  // На телефоне открытое письмо = запись в истории, чтобы системная «Назад» возвращала к списку
+  const detailHistoryRef = useRef(false);
 
   // Recipient search handler with 300ms debounce
   const handleRecipientInputChange = (val) => {
@@ -74,6 +84,7 @@ export const MailPage = () => {
     if (searchDebounceRef.current) {
       clearTimeout(searchDebounceRef.current);
     }
+    const reqId = ++recipientReqRef.current;
 
     const trimmed = val.trim();
     if (trimmed.length < 2) {
@@ -86,21 +97,61 @@ export const MailPage = () => {
     searchDebounceRef.current = setTimeout(async () => {
       try {
         const results = await mailService.searchRecipients(trimmed);
-        setRecipientSuggestions(results);
+        if (reqId !== recipientReqRef.current) return;
+        setRecipientSuggestions(Array.isArray(results) ? results : []);
       } catch (err) {
+        if (reqId !== recipientReqRef.current) return;
         console.warn('[MailPage] searchRecipients warning:', err);
         setRecipientSuggestions([]);
       } finally {
-        setIsSearchingRecipients(false);
+        if (reqId === recipientReqRef.current) setIsSearchingRecipients(false);
       }
     }, 300);
   };
 
   const handleSelectRecipient = (recipient) => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    recipientReqRef.current++;
+    setIsSearchingRecipients(false);
     setComposeData(prev => ({ ...prev, to: recipient.email }));
     setShowRecipientDropdown(false);
     setRecipientSuggestions([]);
   };
+
+  const closeCompose = () => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    recipientReqRef.current++;
+    setIsSearchingRecipients(false);
+    setShowRecipientDropdown(false);
+    setRecipientSuggestions([]);
+    setShowComposeModal(false);
+  };
+
+  // Сброс выбранного письма (кнопка «Назад», удаление, смена папки, выход)
+  const clearSelection = () => {
+    detailReqRef.current++;
+    setIsLoadingDetail(false);
+    setSelectedConversation(null);
+    setSelectedMessage(null);
+    if (detailHistoryRef.current) {
+      detailHistoryRef.current = false;
+      window.history.back();
+    }
+  };
+
+  // Системная «Назад» (Android / жест / браузер) из письма возвращает к списку
+  useEffect(() => {
+    const handlePopState = () => {
+      if (!detailHistoryRef.current) return;
+      detailHistoryRef.current = false;
+      detailReqRef.current++;
+      setIsLoadingDetail(false);
+      setSelectedConversation(null);
+      setSelectedMessage(null);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   // Новое письмо — снова прячем внешние картинки
   useEffect(() => {
@@ -110,7 +161,9 @@ export const MailPage = () => {
   // Close dropdown on click outside
   useEffect(() => {
     const handleClickOutside = (e) => {
-      if (recipientInputWrapperRef.current && !recipientInputWrapperRef.current.contains(e.target)) {
+      // composedPath: в userscript интерфейс живёт в Shadow DOM, и e.target на document — это хост-элемент
+      const target = (typeof e.composedPath === 'function' && e.composedPath()[0]) || e.target;
+      if (recipientInputWrapperRef.current && !recipientInputWrapperRef.current.contains(target)) {
         setShowRecipientDropdown(false);
       }
     };
@@ -142,12 +195,14 @@ export const MailPage = () => {
   }, []);
 
   const loadMailData = async (folderId = activeFolder) => {
+    const reqId = ++listReqRef.current;
     // Check if we have instant cached conversations for this folder to show immediately
     const cachedForFolder = cacheService.get(`mail_convs_${folderId}`);
     if (Array.isArray(cachedForFolder) && cachedForFolder.length > 0) {
       setConversations(cachedForFolder);
     }
 
+    setListError(null);
     setIsLoadingList(true);
     try {
       const [folderList, convList] = await Promise.allSettled([
@@ -155,20 +210,25 @@ export const MailPage = () => {
         mailService.getConversations({ folderId, offset: 0, limit: 30 })
       ]);
 
-      if (folderList.status === 'fulfilled' && Array.isArray(folderList.value)) {
+      if (folderList.status === 'fulfilled' && Array.isArray(folderList.value) && folderList.value.length > 0) {
         setFolders(folderList.value);
       }
 
+      // Пока шёл запрос, пользователь переключил папку — старый ответ не должен затереть новый список
+      if (reqId !== listReqRef.current) return;
+
       if (convList.status === 'fulfilled' && Array.isArray(convList.value)) {
         setConversations(convList.value);
-        if (window.innerWidth >= 1024 && convList.value.length > 0 && !selectedConversation) {
+        if (window.innerWidth >= 1024 && convList.value.length > 0 && !selectedConvRef.current) {
           handleSelectConversation(convList.value[0]);
         }
+      } else if (convList.status === 'rejected') {
+        setListError(convList.reason?.message || 'Не удалось загрузить письма');
       }
     } catch (err) {
       console.error('[MailPage] Failed to load mail data:', err);
     } finally {
-      setIsLoadingList(false);
+      if (reqId === listReqRef.current) setIsLoadingList(false);
     }
   };
 
@@ -208,26 +268,39 @@ export const MailPage = () => {
   const handleLogout = async () => {
     if (window.confirm('Вы действительно хотите выйти из почты на этом устройстве?')) {
       await mailService.logout();
+      listReqRef.current++;
+      setIsLoadingList(false);
       setIsMailAuth(false);
       setMailUser(null);
       setConversations([]);
-      setSelectedConversation(null);
-      setSelectedMessage(null);
+      clearSelection();
     }
   };
 
   const handleSelectFolder = (folderId) => {
     setActiveFolder(folderId);
-    setSelectedConversation(null);
-    setSelectedMessage(null);
+    clearSelection();
+    // Не показываем письма предыдущей папки, пока грузится новая (кэш подставит loadMailData)
+    if (folderId !== activeFolder) setConversations([]);
     loadMailData(folderId);
   };
 
   const handleSelectConversation = async (conv) => {
+    const reqId = ++detailReqRef.current;
     setSelectedConversation(conv);
     setSelectedMessage(null);
+    // На узком экране письмо открывается поверх списка — добавляем шаг в историю для кнопки «Назад»
+    if (conv && window.innerWidth < 1024 && !detailHistoryRef.current) {
+      try {
+        window.history.pushState(window.history.state, '');
+        detailHistoryRef.current = true;
+      } catch (_) {}
+    }
     const identifier = conv?.itemId || conv?.id;
-    if (!identifier) return;
+    if (!identifier) {
+      setIsLoadingDetail(false);
+      return;
+    }
 
     // Check if message is already in cache
     const cachedMsg = cacheService.get(`mail_msg_${identifier}`);
@@ -235,25 +308,29 @@ export const MailPage = () => {
       setSelectedMessage(cachedMsg);
     }
 
-    setIsLoadingDetail(true);
+    setIsLoadingDetail(!cachedMsg);
     try {
       const msg = await mailService.getMessage(identifier);
-      setSelectedMessage(msg || conv);
+      // Пока грузилось, пользователь открыл другое письмо — не подменяем его содержимое
+      if (reqId !== detailReqRef.current) return;
+      setSelectedMessage(msg || { ...conv, id: conv.itemId || conv.id });
       // Mark as read locally
       setConversations(prev =>
         prev.map(c => c.id === conv.id ? { ...c, isRead: true, unreadCount: 0 } : c)
       );
     } catch (err) {
+      if (reqId !== detailReqRef.current) return;
       console.error('[MailPage] Failed to fetch message detail:', err);
       if (!cachedMsg) {
         setSelectedMessage({
           ...conv,
+          id: conv.itemId || conv.id,
           body: conv.snippet || '(Не удалось загрузить содержимое сообщения)',
           attachments: []
         });
       }
     } finally {
-      setIsLoadingDetail(false);
+      if (reqId === detailReqRef.current) setIsLoadingDetail(false);
     }
   };
 
@@ -261,12 +338,15 @@ export const MailPage = () => {
     if (!itemId) return;
     if (!window.confirm('Переместить письмо в удалённые?')) return;
 
+    const conv = selectedConversation;
     try {
       await mailService.deleteItem(itemId);
-      setConversations(prev => prev.filter(c => c.id !== itemId && c.itemId !== itemId));
-      if (selectedConversation?.id === itemId || selectedConversation?.itemId === itemId) {
-        setSelectedConversation(null);
-        setSelectedMessage(null);
+      // id письма из GetItem может не совпасть с id треда в списке — убираем и выбранный тред
+      setConversations(prev => prev.filter(c =>
+        c.id !== itemId && c.itemId !== itemId && !(conv && c.id === conv.id)
+      ));
+      if (!conv || selectedConvRef.current?.id === conv.id) {
+        clearSelection();
       }
     } catch (err) {
       alert(`Ошибка при удалении: ${err.message}`);
@@ -274,17 +354,25 @@ export const MailPage = () => {
   };
 
   const handleDownloadAttachment = async (att) => {
-    if (!att?.id) return;
+    if (!att?.id) {
+      alert('Это вложение недоступно для скачивания');
+      return;
+    }
+    if (downloadingAttId) return;
+    setDownloadingAttId(att.id);
     try {
       await mailService.getAttachment(att.id, att.name, att.contentType);
     } catch (err) {
       alert(`Ошибка при скачивании вложения: ${err.message}`);
+    } finally {
+      setDownloadingAttId(null);
     }
   };
 
   const handleSendSubmit = async (e) => {
     e.preventDefault();
-    if (!composeData.to) {
+    if (isSending) return;
+    if (!composeData.to.trim()) {
       alert('Укажите адрес получателя');
       return;
     }
@@ -298,7 +386,7 @@ export const MailPage = () => {
         isHtml: true
       });
 
-      setShowComposeModal(false);
+      closeCompose();
       setComposeData({ to: '', subject: '', body: '' });
       setSendSuccessNotice(true);
       setTimeout(() => setSendSuccessNotice(false), 4000);
@@ -316,6 +404,7 @@ export const MailPage = () => {
     if (!dateStr) return '';
     try {
       const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return '';
       const now = new Date();
       const isToday = d.toDateString() === now.toDateString();
       if (isToday) {
@@ -444,6 +533,7 @@ export const MailPage = () => {
               word-break: break-word;
             }
             ${darkModeOverrides}
+            ${allowRemote ? '' : 'img[src^="http"], img[src^="//"], img[srcset] { display: none !important; }'}
           </style>
         </head>
         <body>
@@ -556,7 +646,7 @@ export const MailPage = () => {
     <div className="flex-1 flex h-full w-full min-w-0 overflow-hidden bg-bg dark:bg-[#12151B]">
       {/* Toast Notification */}
       {sendSuccessNotice && (
-        <div className="fixed bottom-6 right-6 z-50 flex items-center space-x-2.5 px-4 py-3 rounded-2xl bg-emerald-500 text-white shadow-xl animate-in fade-in slide-in-from-bottom-5">
+        <div className="fixed bottom-24 lg:bottom-6 right-4 left-4 sm:left-auto sm:right-6 z-50 flex items-center space-x-2.5 px-4 py-3 rounded-2xl bg-emerald-500 text-white shadow-xl animate-in fade-in slide-in-from-bottom-5">
           <Icons.CheckCircle2 className="w-5 h-5" />
           <span className="text-sm font-medium">Письмо успешно отправлено!</span>
         </div>
@@ -628,15 +718,20 @@ export const MailPage = () => {
             <h1 className="text-lg font-bold text-gray-900 dark:text-white">Почта</h1>
             <div className="flex items-center space-x-2">
               <button
+                type="button"
                 onClick={() => setShowComposeModal(true)}
                 className="p-2 rounded-xl bg-primary text-white cursor-pointer"
                 title="Написать письмо"
+                aria-label="Написать письмо"
               >
                 <Icons.PenSquare className="w-4 h-4" />
               </button>
               <button
+                type="button"
                 onClick={handleLogout}
                 className="p-2 rounded-xl text-gray-400 hover:text-rose-500 cursor-pointer"
+                title="Выйти из почты"
+                aria-label="Выйти из почты"
               >
                 <Icons.LogOut className="w-4 h-4" />
               </button>
@@ -668,7 +763,7 @@ export const MailPage = () => {
           {/* Folder tabs (Mobile) & Refresh */}
           <div className="flex items-center justify-between text-xs">
             <div className="flex md:hidden space-x-1 overflow-x-auto py-1 max-w-[calc(100%-2rem)]">
-              {folders.slice(0, 4).map(f => (
+              {folders.map(f => (
                 <button
                   key={f.id}
                   onClick={() => handleSelectFolder(f.id)}
@@ -716,7 +811,21 @@ export const MailPage = () => {
           ) : filteredConversations.length === 0 ? (
             <div className="p-8 text-center text-gray-400 dark:text-gray-500">
               <Icons.Inbox className="w-10 h-10 mx-auto mb-2 stroke-1 opacity-50" />
-              <p className="text-sm font-medium">Нет писем в этой папке</p>
+              {listError ? (
+                <>
+                  <p className="text-sm font-medium text-rose-500 dark:text-rose-400 break-words">{listError}</p>
+                  <button
+                    onClick={() => loadMailData(activeFolder)}
+                    className="mt-2 text-xs font-semibold text-primary dark:text-sky-400 hover:underline cursor-pointer"
+                  >
+                    Повторить
+                  </button>
+                </>
+              ) : (
+                <p className="text-sm font-medium">
+                  {conversations.length > 0 ? 'Ничего не найдено' : 'Нет писем в этой папке'}
+                </p>
+              )}
             </div>
           ) : (
             filteredConversations.map(conv => {
@@ -794,7 +903,7 @@ export const MailPage = () => {
             <div className="p-3 sm:p-4 border-b border-gray-200/50 dark:border-[#212634] flex items-center justify-between bg-white/80 dark:bg-[#1A1F2B]/50 backdrop-blur-md min-w-0">
               <div className="flex items-center space-x-2 min-w-0 flex-1 mr-2">
                 <button
-                  onClick={() => { setSelectedConversation(null); setSelectedMessage(null); }}
+                  onClick={clearSelection}
                   className="lg:hidden p-1.5 rounded-xl text-gray-500 hover:bg-gray-100 dark:hover:bg-[#283245] cursor-pointer shrink-0"
                   title="Назад к списку"
                 >
@@ -814,7 +923,7 @@ export const MailPage = () => {
                       body: `
 
 --- Исходное сообщение ---
-От: ${selectedMessage?.from?.name} <${selectedMessage?.from?.email}>
+От: ${selectedMessage?.from?.name || selectedConversation.sender || ''}${selectedMessage?.from?.email ? ` <${selectedMessage.from.email}>` : ''}
 `
                     });
                     setShowComposeModal(true);
@@ -867,12 +976,13 @@ export const MailPage = () => {
               {/* Attachments Section with Download */}
               {selectedMessage?.attachments?.length > 0 && (
                 <div className="mt-3 pt-3 border-t border-gray-200/50 dark:border-[#212634] flex flex-wrap gap-2 min-w-0">
-                  {selectedMessage.attachments.map(att => (
+                  {selectedMessage.attachments.map((att, attIdx) => (
                     <button
-                      key={att.id}
+                      key={att.id || `${att.name}-${attIdx}`}
                       type="button"
                       onClick={() => handleDownloadAttachment(att)}
-                      className="inline-flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-white dark:bg-[#1A1F2B] border border-gray-200/60 dark:border-[#283245] text-xs shadow-sm hover:border-primary transition-colors cursor-pointer text-left max-w-full min-w-0 truncate"
+                      disabled={Boolean(downloadingAttId)}
+                      className={`inline-flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-white dark:bg-[#1A1F2B] border border-gray-200/60 dark:border-[#283245] text-xs shadow-sm hover:border-primary transition-colors cursor-pointer text-left max-w-full min-w-0 truncate disabled:cursor-wait ${downloadingAttId === att.id ? 'opacity-60 animate-pulse' : ''}`}
                       title="Нажмите, чтобы скачать файл"
                     >
                       <Icons.FileText className="w-3.5 h-3.5 text-primary shrink-0" />
@@ -941,7 +1051,8 @@ export const MailPage = () => {
                 <span>Новое сообщение</span>
               </h3>
               <button
-                onClick={() => setShowComposeModal(false)}
+                type="button"
+                onClick={closeCompose}
                 className="p-1.5 rounded-xl text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#283245] cursor-pointer"
               >
                 <Icons.X className="w-5 h-5" />
@@ -959,7 +1070,7 @@ export const MailPage = () => {
                     onFocus={() => {
                       if (composeData.to.trim().length >= 2) setShowRecipientDropdown(true);
                     }}
-                    placeholder="Кому: введите фамилию (Иванов) или email"
+                    placeholder="Кому: фамилия или email"
                     required
                     autoComplete="off"
                     className="w-full px-3.5 py-2 rounded-xl bg-gray-50 dark:bg-[#151922] border border-gray-200 dark:border-[#283245] text-xs sm:text-sm text-gray-900 dark:text-white focus:outline-none focus:border-primary pr-9"
@@ -986,11 +1097,11 @@ export const MailPage = () => {
                           className="p-2.5 sm:p-3 hover:bg-gray-50 dark:hover:bg-[#202738] cursor-pointer transition-colors flex items-center justify-between space-x-3"
                         >
                           <div className="min-w-0 flex-1">
-                            <div className="flex items-center space-x-2">
-                              <span className="text-xs sm:text-sm font-bold text-gray-900 dark:text-white truncate">
+                            <div className="flex items-center space-x-2 min-w-0">
+                              <span className="text-xs sm:text-sm font-bold text-gray-900 dark:text-white truncate min-w-0">
                                 {rec.displayName}
                               </span>
-                              <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                              <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded font-medium ${
                                 rec.isTeacher
                                   ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
                                   : 'bg-primary/10 text-primary dark:text-sky-400 border border-primary/20'
@@ -1034,7 +1145,7 @@ export const MailPage = () => {
               <div className="pt-2 flex items-center justify-end space-x-2 border-t border-gray-200/50 dark:border-[#283245]">
                 <button
                   type="button"
-                  onClick={() => setShowComposeModal(false)}
+                  onClick={closeCompose}
                   className="px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#283245] transition-colors cursor-pointer"
                 >
                   Отмена

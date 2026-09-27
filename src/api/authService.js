@@ -1,4 +1,4 @@
-import { apiClient, tryRefreshToken } from './client.js';
+import { apiClient, tryRefreshToken, getLastRefreshFailure } from './client.js';
 import { cryptoStorage } from './cryptoStorage.js';
 
 export const authService = {
@@ -154,6 +154,13 @@ export const authService = {
           return { user: offlineUser, token: token || 'offline', isOffline: isDeviceOffline };
         }
       }
+    }
+
+    // Сервер явно отверг сохранённые логин/пароль (сменили пароль и т.п.) —
+    // не держим человека в «автономном режиме» с мёртвой сессией, а ведём на экран входа
+    if (getLastRefreshFailure() === 'CREDENTIALS_INVALID') {
+      await cryptoStorage.purgeAll();
+      return null;
     }
 
     // 3. Fallback: if server is temporarily unreachable, grant access with cached profile

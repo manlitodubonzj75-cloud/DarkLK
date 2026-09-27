@@ -1,22 +1,38 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Icons } from './Icons';
 import { TERMS_OF_USE, PRIVACY_POLICY, LEGAL_DOC_VERSION, LEGAL_DOC_DATE } from '../../constants/legalText';
 
 export const LegalModal = ({ isOpen, onClose, onAccept, initialTab = 'terms', showAcceptButton = false }) => {
-  const [activeTab, setActiveTab] = useState(initialTab);
+  const normalizeTab = (tab) => (tab === 'privacy' ? 'privacy' : 'terms');
+  const [activeTab, setActiveTab] = useState(() => normalizeTab(initialTab));
+
+  // Компонент остаётся смонтированным между открытиями — синхронизируем вкладку при каждом открытии
+  useEffect(() => {
+    if (isOpen) setActiveTab(normalizeTab(initialTab));
+  }, [isOpen, initialTab]);
+
+  // Esc закрывает окно
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') onClose?.();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
-  const currentDoc = activeTab === 'terms' ? TERMS_OF_USE : PRIVACY_POLICY;
+  const currentDoc = activeTab === 'privacy' ? PRIVACY_POLICY : TERMS_OF_USE;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/75 backdrop-blur-md animate-fade-in">
+    <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center p-3 pt-[max(0.75rem,env(safe-area-inset-top))] pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-6 bg-black/75 backdrop-blur-md animate-fade-in">
       <div 
-        className="relative w-full max-w-3xl max-h-[90vh] flex flex-col bg-card dark:bg-[#181C26] border border-border dark:border-[#2B3242] rounded-3xl shadow-2xl overflow-hidden"
+        className="relative w-full max-w-3xl max-h-full flex flex-col bg-card dark:bg-[#181C26] border border-border dark:border-[#2B3242] rounded-3xl shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
-        <div className="p-4 sm:p-6 border-b border-border dark:border-[#212634] flex items-center justify-between shrink-0 bg-surface dark:bg-[#1C2230]">
+        <div className="p-4 sm:p-6 border-b border-border dark:border-[#212634] flex items-center justify-between shrink-0 bg-card dark:bg-[#1C2230]">
           <div className="flex items-center space-x-3.5">
             <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-primary/10 text-primary dark:text-[#38BDF8] flex items-center justify-center shrink-0">
               <Icons.Shield size={22} />
@@ -36,6 +52,7 @@ export const LegalModal = ({ isOpen, onClose, onAccept, initialTab = 'terms', sh
           </div>
           <button
             onClick={onClose}
+            aria-label="Закрыть"
             className="p-2 rounded-xl text-textMuted dark:text-[#8E98A8] hover:bg-bg dark:hover:bg-[#262D3D] hover:text-dark dark:hover:text-white transition-colors"
           >
             <Icons.X size={20} />
@@ -79,7 +96,7 @@ export const LegalModal = ({ isOpen, onClose, onAccept, initialTab = 'terms', sh
         </div>
 
         {/* Document Body (Scrollable) */}
-        <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 text-xs sm:text-sm text-text dark:text-[#CBD5E1] leading-relaxed select-text">
+        <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 text-xs sm:text-sm text-dark dark:text-[#CBD5E1] leading-relaxed select-text">
           {currentDoc.sections.map((section, idx) => (
             <div 
               key={idx} 
@@ -96,7 +113,7 @@ export const LegalModal = ({ isOpen, onClose, onAccept, initialTab = 'terms', sh
         </div>
 
         {/* Modal Footer */}
-        <div className="p-4 sm:p-5 border-t border-border dark:border-[#212634] bg-surface dark:bg-[#181C26] flex items-center justify-end shrink-0 gap-3">
+        <div className="p-4 sm:p-5 border-t border-border dark:border-[#212634] bg-card dark:bg-[#181C26] flex items-center justify-end shrink-0 gap-3">
           <div className="flex items-center space-x-2.5">
             {showAcceptButton && onAccept ? (
               <>
@@ -111,7 +128,7 @@ export const LegalModal = ({ isOpen, onClose, onAccept, initialTab = 'terms', sh
                     onAccept();
                     onClose();
                   }}
-                  className="px-5 py-2.5 rounded-xl bg-primary dark:bg-[#1E6685] hover:bg-primary-dark dark:hover:bg-[#257C9F] text-white font-bold text-xs sm:text-sm transition-all shadow-md active:scale-95"
+                  className="px-5 py-2.5 rounded-xl bg-primary dark:bg-[#1E6685] hover:bg-primary/90 dark:hover:bg-[#257C9F] text-white font-bold text-xs sm:text-sm transition-all shadow-md active:scale-95"
                 >
                   Принять условия и политику
                 </button>
@@ -119,7 +136,7 @@ export const LegalModal = ({ isOpen, onClose, onAccept, initialTab = 'terms', sh
             ) : (
               <button
                 onClick={onClose}
-                className="px-5 py-2.5 rounded-xl bg-primary dark:bg-[#1E6685] hover:bg-primary-dark dark:hover:bg-[#257C9F] text-white font-bold text-xs sm:text-sm transition-colors shadow-sm"
+                className="px-5 py-2.5 rounded-xl bg-primary dark:bg-[#1E6685] hover:bg-primary/90 dark:hover:bg-[#257C9F] text-white font-bold text-xs sm:text-sm transition-colors shadow-sm"
               >
                 Закрыть
               </button>

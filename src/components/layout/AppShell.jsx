@@ -6,7 +6,7 @@ import { Icons } from '../common/Icons';
 import { Logo } from '../common/Logo';
 import { LegalModal } from '../common/LegalModal';
 import { UpdateModal } from '../common/UpdateModal';
-import { updateService } from '../../api/updateService';
+import { updateService, APP_VERSION } from '../../api/updateService';
 import { PullToRefresh } from "../common/PullToRefresh";
 
 export const AppShell = () => {
@@ -39,6 +39,24 @@ export const AppShell = () => {
   useEffect(() => {
     setIsMobileDrawerOpen(false);
   }, [location.pathname]);
+
+  // Close drawer with Esc (hardware keyboards / desktop browsers at narrow widths)
+  useEffect(() => {
+    if (!isMobileDrawerOpen) return undefined;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') setIsMobileDrawerOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isMobileDrawerOpen]);
+
+  // Re-render the offline banner every minute so "N мин. назад" doesn't go stale
+  const [, setNowTick] = useState(0);
+  useEffect(() => {
+    if (!isOffline) return undefined;
+    const id = setInterval(() => setNowTick((n) => n + 1), 60000);
+    return () => clearInterval(id);
+  }, [isOffline]);
 
   // Listen for layout changes from SettingsPage
   useEffect(() => {
@@ -133,9 +151,9 @@ export const AppShell = () => {
   };
 
   return (
-    <div className="flex h-full h-[100dvh] w-full bg-bg dark:bg-[#12151B] text-dark dark:text-white font-sans overflow-hidden">
+    <div className="flex h-full h-[100dvh] w-full bg-bg dark:bg-[#12151B] text-dark dark:text-white font-sans overflow-hidden pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
       {/* DESKTOP SIDEBAR */}
-      <aside className="hidden md:flex flex-col w-64 h-full bg-primary dark:bg-[#12151B] text-white border-r border-white/10 dark:border-[#212634] shadow-xl z-20 shrink-0">
+      <aside className="hidden md:flex flex-col w-64 h-full bg-primary dark:bg-[#12151B] text-white border-r border-white/10 dark:border-[#212634] shadow-xl z-20 shrink-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
         {/* Logo */}
         <div className="p-5 pt-6 flex items-center space-x-3 border-b border-white/10 dark:border-[#212634]">
           <Logo size={42} className="shrink-0 ring-1 ring-white/20" />
@@ -208,9 +226,9 @@ export const AppShell = () => {
             onClick={() => setLegalModalTab('privacy')}
             className="hover:underline hover:text-white/80 transition-colors"
           >
-            152-ФЗ / Безопасность
+            Данные и безопасность
           </button>
-          <span>v1.0.0</span>
+          <span>v{APP_VERSION}</span>
         </div>
 
         {/* Theme Toggle & Logout */}
@@ -261,6 +279,7 @@ export const AppShell = () => {
               </div>
               <button
                 onClick={() => setIsMobileDrawerOpen(false)}
+                aria-label="Закрыть меню"
                 className="p-1.5 rounded-xl text-white/70 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
               >
                 <Icons.X size={20} />
@@ -324,7 +343,7 @@ export const AppShell = () => {
               >
                 <div className="flex items-center space-x-3">
                   {isDark ? <Icons.Sun size={18} className="text-amber-400" /> : <Icons.Moon size={18} className="text-sky-300" />}
-                  <span>{isDark ? 'Светлая тема' : 'Тёмная тема'}</span>
+                  <span>Тёмная тема</span>
                 </div>
                 <span className="text-xs text-white/60 font-normal">{isDark ? 'Вкл' : 'Выкл'}</span>
               </button>
@@ -371,7 +390,7 @@ export const AppShell = () => {
       )}
 
       {/* MAIN VIEW AREA */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden">
+      <div className="flex-1 flex flex-col h-full min-w-0 overflow-hidden md:pt-[env(safe-area-inset-top)]">
         {/* Mobile Header Bar */}
         <header className="md:hidden flex items-center justify-between px-4 py-3 bg-card dark:bg-[#1F2430] border-b border-border dark:border-[#212634] z-10 shrink-0 pt-[max(0.75rem,env(safe-area-inset-top))]">
           {mobileLayoutMode === 'sidebar' ? (
@@ -382,6 +401,7 @@ export const AppShell = () => {
                 onClick={() => setIsMobileDrawerOpen(true)}
                 className="p-2 -ml-2 rounded-xl text-dark dark:text-white hover:bg-bg dark:hover:bg-[#262D3D] transition-colors cursor-pointer"
                 title="Открыть меню"
+                aria-label="Открыть меню"
               >
                 <Icons.Menu size={22} />
               </button>
@@ -422,13 +442,13 @@ export const AppShell = () => {
             <>
               <div
                 onClick={() => navigate('/settings')}
-                className="flex items-center space-x-3 cursor-pointer hover:opacity-85 transition-opacity"
+                className="flex items-center space-x-3 cursor-pointer hover:opacity-85 transition-opacity min-w-0 flex-1 mr-2"
                 title="Открыть профиль и настройки"
               >
                 {photoUrl ? (
-                  <img src={photoUrl} alt="Avatar" className="w-9 h-9 rounded-full object-cover border border-accent dark:border-[#22869A]" />
+                  <img src={photoUrl} alt="Avatar" className="w-9 h-9 rounded-full object-cover border border-accent dark:border-[#22869A] shrink-0" />
                 ) : (
-                  <div className="w-9 h-9 rounded-full bg-accent dark:bg-[#22869A] flex items-center justify-center font-bold text-white text-xs">
+                  <div className="w-9 h-9 shrink-0 rounded-full bg-accent dark:bg-[#22869A] flex items-center justify-center font-bold text-white text-xs">
                     {getInitials(user?.name)}
                   </div>
                 )}
@@ -442,19 +462,25 @@ export const AppShell = () => {
                 </div>
               </div>
 
-              <div className="flex items-center space-x-1">
+              <div className="flex items-center space-x-1 shrink-0">
                 <button
                   onClick={toggleTheme}
                   className="p-2 rounded-xl text-textMuted dark:text-[#8E98A8] hover:bg-bg dark:hover:bg-[#262D3D]"
+                  title="Переключить тему"
+                  aria-label="Переключить тему"
                 >
                   {isDark ? <Icons.Sun size={18} /> : <Icons.Moon size={18} />}
                 </button>
                 <button
                   onClick={() => {
-                    logout();
-                    navigate('/login');
+                    if (window.confirm('Вы действительно хотите выйти из аккаунта?')) {
+                      logout();
+                      navigate('/login');
+                    }
                   }}
                   className="p-2 rounded-xl text-textMuted dark:text-[#8E98A8] hover:text-rose-500"
+                  title="Выйти из аккаунта"
+                  aria-label="Выйти из аккаунта"
                 >
                   <Icons.LogOut size={18} />
                 </button>
@@ -487,12 +513,12 @@ export const AppShell = () => {
         {/* Scrollable Page Body with Single Root Pull-to-Refresh */}
         <main className="flex-1 overflow-hidden bg-bg dark:bg-[#12151B] w-full min-w-0 flex flex-col">
           {isMailRoute ? (
-            <div className={`h-full w-full flex-1 min-w-0 overflow-hidden flex flex-col ${mobileLayoutMode === 'sidebar' ? 'pb-0' : 'pb-16'} md:pb-0`}>
+            <div className={`h-full w-full flex-1 min-w-0 overflow-hidden flex flex-col ${mobileLayoutMode === 'sidebar' ? 'pb-[env(safe-area-inset-bottom)]' : 'pb-0'} md:pb-0`}>
               <Outlet />
             </div>
           ) : (
             <PullToRefresh>
-              <div className={`p-3 sm:p-5 md:p-8 max-w-5xl mx-auto ${mobileLayoutMode === 'sidebar' ? 'pb-8' : 'pb-24'} md:pb-8 w-full min-w-0`}>
+              <div className={`p-3 sm:p-5 md:p-8 max-w-5xl mx-auto ${mobileLayoutMode === 'sidebar' ? 'pb-[max(2rem,env(safe-area-inset-bottom))]' : 'pb-24'} md:pb-8 w-full min-w-0`}>
                 <Outlet />
               </div>
             </PullToRefresh>
@@ -508,7 +534,7 @@ export const AppShell = () => {
                 to={item.to}
                 end={item.to === '/'}
                 className={({ isActive }) =>
-                  `flex flex-col items-center py-1 px-2 rounded-xl transition-all ${
+                  `flex flex-col items-center py-1 px-1 sm:px-2 rounded-xl transition-all ${
                     isActive
                       ? 'text-primary dark:text-[#38BDF8] font-bold scale-105'
                       : 'text-textMuted dark:text-[#8E98A8] hover:text-dark dark:hover:text-white'

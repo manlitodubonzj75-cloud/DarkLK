@@ -91,7 +91,7 @@ export const gradesService = {
     const studentInfo = studentInfoResult.status === 'fulfilled' ? studentInfoResult.value : null;
 
     // Detect active course and semester
-    const activeInfo = this.extractActiveSemester(rawProgress, currentUser);
+    const activeInfo = this.extractActiveSemester(rawProgress, currentUser || cryptoStorage.getUser());
     const activeCourse = activeInfo.course;
     const activeSemester = activeInfo.semester;
 

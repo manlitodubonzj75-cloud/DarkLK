@@ -225,6 +225,11 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
 }
 
 let refreshPromise = null;
+// Почему последний тихий перелогин не удался: 'CREDENTIALS_INVALID' | 'NETWORK' | null
+let lastRefreshFailure = null;
+export function getLastRefreshFailure() {
+  return lastRefreshFailure;
+}
 
 /**
  * Preemptive or reactive token refresh with single-flight mutex.
@@ -234,6 +239,7 @@ export async function tryRefreshToken() {
   if (refreshPromise) return refreshPromise;
 
   refreshPromise = (async () => {
+    lastRefreshFailure = null;
     try {
       // 1. Try /auth/refresh if refresh_token is available
       const refreshToken = cryptoStorage.getRefreshToken();
@@ -284,6 +290,7 @@ export async function tryRefreshToken() {
             }
           } else if (response.status === 401 || response.status === 403) {
             // Credentials rejected by the server
+            lastRefreshFailure = 'CREDENTIALS_INVALID';
             console.warn('[Auth Client] Saved credentials rejected by university server (401/403).');
             if (typeof window !== 'undefined') {
               window.dispatchEvent(new CustomEvent('auth-session-expired', { detail: 'CREDENTIALS_INVALID' }));
@@ -291,6 +298,7 @@ export async function tryRefreshToken() {
             return false;
           }
         } catch (err) {
+          lastRefreshFailure = 'NETWORK';
           console.warn('[Auth Client] Silent re-login network failure:', err.message);
           return false;
         }
@@ -340,7 +348,9 @@ export async function apiClient(endpoint, options = {}) {
           }
         }
       }
-      throw new Error('UNAUTHORIZED');
+      const unauthorized = new Error('UNAUTHORIZED');
+      unauthorized.status = 401;
+      throw unauthorized;
     }
 
     if (response.status === 204) {

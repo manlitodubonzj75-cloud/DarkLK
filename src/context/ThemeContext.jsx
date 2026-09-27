@@ -13,6 +13,11 @@ export const ThemeProvider = ({ children }) => {
     }
   });
 
+  // Явный выбор пользователя сохраняем; без него — следуем системной теме
+  const hasUserPrefRef = useRef((() => {
+    try { return Boolean(localStorage.getItem('msal_theme')); } catch (_) { return false; }
+  })());
+
   const lastToggleTimeRef = useRef(0);
   const rafIdRef = useRef(null);
   const saveTimeoutRef = useRef(null);
@@ -25,6 +30,10 @@ export const ThemeProvider = ({ children }) => {
     } else {
       root.classList.remove('dark');
     }
+    root.style.colorScheme = isDark ? 'dark' : 'light';
+
+    // Пока пользователь не выбрал тему вручную, не фиксируем её — иначе смена системной темы игнорируется
+    if (!hasUserPrefRef.current) return undefined;
 
     // Debounce localStorage write to prevent blocking disk I/O on rapid clicks
     if (saveTimeoutRef.current) {
@@ -40,6 +49,25 @@ export const ThemeProvider = ({ children }) => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
   }, [isDark]);
+
+  // Follow system theme changes while no explicit user choice is saved
+  useEffect(() => {
+    let mql;
+    try {
+      mql = window.matchMedia('(prefers-color-scheme: dark)');
+    } catch (_) {
+      return undefined;
+    }
+    const handleChange = (e) => {
+      if (!hasUserPrefRef.current) setIsDark(e.matches);
+    };
+    if (mql.addEventListener) mql.addEventListener('change', handleChange);
+    else if (mql.addListener) mql.addListener(handleChange);
+    return () => {
+      if (mql.removeEventListener) mql.removeEventListener('change', handleChange);
+      else if (mql.removeListener) mql.removeListener(handleChange);
+    };
+  }, []);
 
   // Clean up RAF on unmount
   useEffect(() => {
@@ -58,6 +86,7 @@ export const ThemeProvider = ({ children }) => {
       return;
     }
     lastToggleTimeRef.current = now;
+    hasUserPrefRef.current = true;
 
     if (rafIdRef.current) {
       cancelAnimationFrame(rafIdRef.current);

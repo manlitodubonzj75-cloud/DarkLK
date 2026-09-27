@@ -64,24 +64,8 @@ const userScriptCode = `${header}
 (function() {
   'use strict';
 
-  // Inject DarkMSAL compiled Tailwind & component CSS
-  const css = ${JSON.stringify(cssContent)};
-  if (typeof GM_addStyle !== 'undefined') {
-    GM_addStyle(css);
-  } else {
-    function injectStyle() {
-      if (document.getElementById('darkmsal-injected-styles')) return;
-      const styleEl = document.createElement('style');
-      styleEl.id = 'darkmsal-injected-styles';
-      styleEl.textContent = css;
-      (document.head || document.documentElement).appendChild(styleEl);
-    }
-    if (document.head || document.documentElement) {
-      injectStyle();
-    } else {
-      document.addEventListener('DOMContentLoaded', injectStyle);
-    }
-  }
+  // CSS приложения вставляется внутрь Shadow DOM (см. src/userscript-entry.jsx), а не в страницу вуза
+  const __DARKMSAL_CSS__ = ${JSON.stringify(cssContent)};
 
   // Execute bundled DarkMSAL React application
   ${jsContent}

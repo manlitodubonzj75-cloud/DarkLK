@@ -2,8 +2,21 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as Icons from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { lkService, formatISODate, formatLessonTime, getMondayOfWeek } from '../../api';
+import { lkService, formatISODate, formatLessonTime, getMondayOfWeek, parseLessonDate } from '../../api';
 import { cacheService } from '../../api';
+
+// Поля могут прийти объектом ({ name }) — React не умеет рендерить объекты
+const asText = (v) => (v && typeof v === 'object' ? (v.name || v.title || '') : v);
+
+// 1 пара, 2 пары, 5 пар, 11 пар, 21 пара
+function pluralPairs(n) {
+  const num = Math.abs(Number(n)) || 0;
+  const mod10 = num % 10;
+  const mod100 = num % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'пара';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'пары';
+  return 'пар';
+}
 
 function extractTodayLessons(weekData, todayISO) {
   if (!Array.isArray(weekData) || weekData.length === 0) return null;
@@ -60,19 +73,22 @@ export const DashboardPage = () => {
   });
 
   const [showMissedModal, setShowMissedModal] = useState(false);
+  const [scheduleError, setScheduleError] = useState(false);
 
   // 2. Fetch fresh data in background (decoupled for instant schedule render)
   useEffect(() => {
     let isMounted = true;
+    // Date из mondayISO (строка стабильна между рендерами, в отличие от объекта Date)
+    const [my, mm, md] = mondayISO.split('-').map(Number);
+    const mondayDate = new Date(my, mm - 1, md);
 
     async function fetchSchedule(forceRefresh = false) {
       try {
-        const weekSchedule = await lkService.getScheduleWeek(monday, { forceRefresh, ttl: 300000 });
+        const weekSchedule = await lkService.getScheduleWeek(mondayDate, { forceRefresh, ttl: 300000 });
         if (!isMounted) return;
         const lessons = extractTodayLessons(weekSchedule, todayISO);
-        if (lessons !== null) {
-          setScheduleToday(lessons);
-        }
+        setScheduleToday(lessons !== null ? lessons : []);
+        setScheduleError(false);
       } catch (err) {
         console.warn('[Dashboard] Schedule load warning:', err.message);
         if (!isMounted) return;
@@ -80,6 +96,8 @@ export const DashboardPage = () => {
         const lessons = extractTodayLessons(cachedWeek, todayISO);
         if (lessons !== null) {
           setScheduleToday(lessons);
+        } else {
+          setScheduleError(true);
         }
       } finally {
         if (isMounted) setIsScheduleLoading(false);
@@ -135,21 +153,22 @@ export const DashboardPage = () => {
       isMounted = false;
       window.removeEventListener('app-pull-to-refresh', handlePull);
     };
-  }, [user, isCollege, monday, scheduleCacheKey, todayISO]);
+  // Не кладём сюда объект monday: он новый на каждом рендере -> бесконечный цикл запросов/перерисовок
+  }, [user, isCollege, mondayISO, scheduleCacheKey, todayISO]);
 
   const QUICK_ACTIONS = isCollege
     ? [
         { title: 'Расписание', icon: Icons.Calendar, path: '/schedule', color: 'text-primary dark:text-[#4E80EE] bg-primary/10 dark:bg-[#4E80EE]/10' },
         { title: 'Успеваемость', icon: Icons.Award, path: '/grades', color: 'text-secondary dark:text-emerald-400 bg-secondary/10 dark:bg-emerald-400/10' },
         { title: 'Зачётка', icon: Icons.BookOpen, path: '/recordbook', color: 'text-accent dark:text-cyan-400 bg-accent/10 dark:bg-cyan-400/10' },
-        { title: 'Группа', icon: Icons.Users, path: '/groupmates', color: 'text-violet-500 dark:text-violet-400 bg-violet-500/10 dark:bg-violet-400/10' }
+        { title: 'Почта', icon: Icons.Mail, path: '/mail', color: 'text-violet-500 dark:text-violet-400 bg-violet-500/10 dark:bg-violet-400/10' }
       ]
     : [
         { title: 'Расписание', icon: Icons.Calendar, path: '/schedule', color: 'text-primary dark:text-[#4E80EE] bg-primary/10 dark:bg-[#4E80EE]/10' },
         { title: 'Успеваемость', icon: Icons.Award, path: '/grades', color: 'text-secondary dark:text-emerald-400 bg-secondary/10 dark:bg-emerald-400/10' },
         { title: 'Зачётка', icon: Icons.BookOpen, path: '/recordbook', color: 'text-accent dark:text-cyan-400 bg-accent/10 dark:bg-cyan-400/10' },
         { title: 'Консультации', icon: Icons.HelpCircle, path: '/consultations', color: 'text-amber-500 dark:text-amber-400 bg-amber-500/10 dark:bg-amber-400/10' },
-        { title: 'Группа', icon: Icons.Users, path: '/groupmates', color: 'text-violet-500 dark:text-violet-400 bg-violet-500/10 dark:bg-violet-400/10' }
+        { title: 'Почта', icon: Icons.Mail, path: '/mail', color: 'text-violet-500 dark:text-violet-400 bg-violet-500/10 dark:bg-violet-400/10' }
       ];
 
   const handleOpenLink = (url) => {
@@ -189,29 +208,29 @@ export const DashboardPage = () => {
 
       {/* Metrics Row */}
       <section aria-label="Учебная сводка">
-        <div className={`grid ${isCollege ? 'grid-cols-3' : 'grid-cols-4'} gap-3`}>
-          <div className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between">
+        <div className={`grid ${isCollege ? 'grid-cols-3' : 'grid-cols-2 sm:grid-cols-4'} gap-3`}>
+          <div className="bg-card dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between">
             <span className="text-xs text-textMuted dark:text-[#8E98A8]">Курс</span>
-            <span className="text-2xl font-bold text-text dark:text-[#F1F5F9] mt-1">
+            <span className="text-2xl font-bold text-dark dark:text-[#F1F5F9] mt-1">
               {user?.course || '1'}
             </span>
           </div>
           {!isCollege && (
-            <div className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between">
+            <div className="bg-card dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between">
               <span className="text-xs text-textMuted dark:text-[#8E98A8]">Семестр</span>
-              <span className="text-2xl font-bold text-text dark:text-[#F1F5F9] mt-1">
+              <span className="text-2xl font-bold text-dark dark:text-[#F1F5F9] mt-1">
                 {user?.semester || '1'}
               </span>
             </div>
           )}
-          <div className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between">
+          <div className="bg-card dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between">
             <div className="flex items-center justify-between text-secondary dark:text-emerald-400">
               <span className="text-xs text-textMuted dark:text-[#8E98A8]">
                 {isCollege ? 'Средний балл' : 'Рейтинг'}
               </span>
               {isCollege ? <Icons.GraduationCap size={16} /> : <Icons.Award size={16} />}
             </div>
-            <span className="text-2xl font-bold text-text dark:text-[#F1F5F9] mt-1">
+            <span className="text-2xl font-bold text-dark dark:text-[#F1F5F9] mt-1">
               {stats.loading ? '—' : stats.rating}
             </span>
           </div>
@@ -220,7 +239,7 @@ export const DashboardPage = () => {
             role={isCollege ? 'button' : undefined}
             tabIndex={isCollege ? 0 : undefined}
             onKeyDown={isCollege ? (e) => (e.key === 'Enter' || e.key === ' ') && setShowMissedModal(true) : undefined}
-            className={`bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between ${
+            className={`bg-card dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between ${
               isCollege
                 ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-[#232D3F] transition-colors focus:outline-none focus:ring-2 focus:ring-primary dark:focus:ring-[#4E80EE]'
                 : ''
@@ -233,7 +252,7 @@ export const DashboardPage = () => {
               <Icons.Clock size={16} />
             </div>
             <div className="flex items-baseline justify-between mt-1">
-              <span className="text-2xl font-bold text-text dark:text-[#F1F5F9]">
+              <span className="text-2xl font-bold text-dark dark:text-[#F1F5F9]">
                 {stats.loading ? '—' : stats.passes}
               </span>
               {isCollege && (
@@ -256,14 +275,15 @@ export const DashboardPage = () => {
             const Icon = action.icon;
             return (
               <button
+                type="button"
                 key={action.path}
                 onClick={() => navigate(action.path)}
-                className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 hover:bg-slate-50 dark:hover:bg-[#232D3F] transition-all flex flex-col items-center justify-center text-center group active:scale-[0.98]"
+                className="bg-card dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 hover:bg-slate-50 dark:hover:bg-[#232D3F] transition-all flex flex-col items-center justify-center text-center group active:scale-[0.98]"
               >
                 <div className={`p-3 rounded-xl mb-2 group-hover:scale-110 transition-transform ${action.color}`}>
                   <Icon size={22} />
                 </div>
-                <span className="text-xs font-semibold text-text dark:text-[#F1F5F9] truncate w-full">
+                <span className="text-xs font-semibold text-dark dark:text-[#F1F5F9] truncate w-full">
                   {action.title}
                 </span>
               </button>
@@ -280,6 +300,7 @@ export const DashboardPage = () => {
               Расписание на сегодня
             </h2>
             <button
+              type="button"
               onClick={() => navigate('/schedule')}
               className="text-xs font-semibold text-primary dark:text-[#4E80EE] hover:underline"
             >
@@ -288,44 +309,53 @@ export const DashboardPage = () => {
           </div>
 
           {isScheduleLoading ? (
-            <div className="bg-surface dark:bg-[#1C2433] p-8 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col items-center justify-center text-center">
+            <div className="bg-card dark:bg-[#1C2433] p-8 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col items-center justify-center text-center">
               <Icons.Loader2 size={24} className="animate-spin text-primary dark:text-[#4E80EE] mb-2" />
               <p className="text-xs text-textMuted dark:text-[#8E98A8]">Загрузка расписания...</p>
             </div>
+          ) : scheduleError && scheduleToday.length === 0 ? (
+            <div className="bg-card dark:bg-[#1C2433] p-8 rounded-xl border border-border/40 dark:border-[#283245]/60 text-center">
+              <Icons.WifiOff size={32} className="mx-auto text-rose-500 mb-2 opacity-80" />
+              <h3 className="font-semibold text-dark dark:text-[#F1F5F9] text-sm">Не удалось загрузить расписание</h3>
+              <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-0.5">Проверьте подключение и потяните экран вниз, чтобы обновить</p>
+            </div>
           ) : scheduleToday.length === 0 ? (
-            <div className="bg-surface dark:bg-[#1C2433] p-8 rounded-xl border border-border/40 dark:border-[#283245]/60 text-center">
+            <div className="bg-card dark:bg-[#1C2433] p-8 rounded-xl border border-border/40 dark:border-[#283245]/60 text-center">
               <Icons.Smile size={32} className="mx-auto text-textMuted dark:text-[#8E98A8] mb-2 opacity-60" />
-              <h3 className="font-semibold text-text dark:text-[#F1F5F9] text-sm">Пар нет</h3>
+              <h3 className="font-semibold text-dark dark:text-[#F1F5F9] text-sm">Пар нет</h3>
               <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-0.5">Сегодня учебных занятий не запланировано</p>
             </div>
           ) : (
             <div className="space-y-2.5">
               {scheduleToday.map((lesson, idx) => {
-                const timeStr = lesson.time || formatLessonTime(lesson.num);
+                // formatLessonTime сам разбирает start/end, time и номер пары; разделитель — «—»
+                const timeStr = formatLessonTime(lesson) || '';
+                const [timeStart, timeEnd] = timeStr.split(/\s*[—-]\s*/);
+                const room = asText(lesson.auditory) || asText(lesson.room);
                 return (
                   <div
                     key={idx}
-                    className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex items-start gap-3.5 hover:bg-slate-50 dark:hover:bg-[#232D3F] transition-colors"
+                    className="bg-card dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex items-start gap-3.5 hover:bg-slate-50 dark:hover:bg-[#232D3F] transition-colors"
                   >
                     <div className="flex flex-col items-center justify-center px-2 py-1 bg-primary/10 dark:bg-[#4E80EE]/10 rounded-lg text-primary dark:text-[#4E80EE] font-semibold text-xs shrink-0 min-w-[58px]">
-                      <span>{timeStr.split('-')[0] || timeStr}</span>
-                      <span className="text-[10px] opacity-75">{timeStr.split('-')[1] || ''}</span>
+                      <span>{timeStart || timeStr}</span>
+                      <span className="text-[10px] opacity-75">{timeEnd || ''}</span>
                     </div>
 
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
-                        <h4 className="font-semibold text-text dark:text-[#F1F5F9] text-sm truncate">
-                          {lesson.name || lesson.discipline || 'Учебное занятие'}
+                        <h4 className="font-semibold text-dark dark:text-[#F1F5F9] text-sm truncate">
+                          {asText(lesson.name) || asText(lesson.discipline) || asText(lesson.subject) || lesson.title || 'Учебное занятие'}
                         </h4>
-                        {lesson.room && (
+                        {room && (
                           <span className="text-xs font-medium px-2 py-0.5 bg-bg dark:bg-[#12151B] border border-border/40 dark:border-[#283245]/60 rounded-md text-textMuted dark:text-[#8E98A8] shrink-0">
-                            ауд. {lesson.room}
+                            ауд. {room}
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-3 mt-1 text-xs text-textMuted dark:text-[#8E98A8]">
-                        {lesson.type && <span>{lesson.type}</span>}
-                        {lesson.teacher && <span className="truncate">• {lesson.teacher}</span>}
+                      <div className="flex items-center gap-3 mt-1 text-xs text-textMuted dark:text-[#8E98A8] min-w-0">
+                        {lesson.type && <span className="shrink-0">{asText(lesson.type)}</span>}
+                        {lesson.teacher && <span className="truncate min-w-0">• {asText(lesson.teacher)}</span>}
                       </div>
                     </div>
                   </div>
@@ -345,17 +375,19 @@ export const DashboardPage = () => {
             onTouchMove={(e) => e.stopPropagation()}
             onTouchEnd={(e) => e.stopPropagation()}
           >
-            <div className="bg-surface dark:bg-[#1C2433] rounded-2xl border border-border/60 dark:border-[#283245] w-full max-w-lg max-h-[80vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="bg-card dark:bg-[#1C2433] rounded-2xl border border-border/60 dark:border-[#283245] w-full max-w-lg max-h-[80vh] flex flex-col shadow-2xl overflow-hidden">
               <div className="p-4 border-b border-border/40 dark:border-[#283245] flex items-center justify-between">
                 <div className="flex items-center space-x-2">
                   <div className="p-1.5 rounded-lg bg-rose-500/10 text-rose-500">
                     <Icons.AlertTriangle size={18} />
                   </div>
-                  <h3 className="font-bold text-text dark:text-[#F1F5F9] text-base">Пропущенные занятия</h3>
+                  <h3 className="font-bold text-dark dark:text-[#F1F5F9] text-base">Пропущенные занятия</h3>
                 </div>
                 <button
+                  type="button"
+                  aria-label="Закрыть"
                   onClick={() => setShowMissedModal(false)}
-                  className="p-1.5 rounded-lg text-textMuted hover:text-text hover:bg-bg dark:hover:bg-[#12151B] transition-colors"
+                  className="p-1.5 rounded-lg text-textMuted hover:text-dark hover:bg-bg dark:hover:bg-[#12151B] transition-colors"
                 >
                   <Icons.X size={18} />
                 </button>
@@ -369,11 +401,12 @@ export const DashboardPage = () => {
                       className="p-3 rounded-xl bg-bg dark:bg-[#12151B] border border-border/30 dark:border-[#283245]/40 flex items-start justify-between gap-3 text-xs"
                     >
                       <div>
-                        <div className="font-semibold text-text dark:text-[#F1F5F9]">
+                        <div className="font-semibold text-dark dark:text-[#F1F5F9]">
                           {item.discipline || item.name || 'Занятие'}
                         </div>
                         <div className="text-textMuted dark:text-[#8E98A8] mt-0.5">
-                          {item.date ? new Date(item.date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}
+                          {/* даты пропусков приходят как DD.MM.YYYY — new Date() даёт Invalid Date */}
+                          {parseLessonDate(item.date)?.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' }) || item.date || ''}
                           {item.type ? ` • ${item.type}` : ''}
                         </div>
                       </div>
@@ -393,7 +426,7 @@ export const DashboardPage = () => {
               <div className="p-4 border-t border-border/40 dark:border-[#283245] bg-bg/50 dark:bg-[#12151B]/50 flex items-center justify-between">
                 <span className="text-xs text-textMuted dark:text-[#8E98A8]">Всего пропущено:</span>
                 <span className="text-sm font-bold text-rose-500">
-                  {stats.passes} {isCollege ? 'пар' : 'ч'}
+                  {stats.passes} {isCollege ? pluralPairs(stats.passes) : 'ч'}
                 </span>
               </div>
             </div>
@@ -404,16 +437,18 @@ export const DashboardPage = () => {
       {/* Footer Support & Source Code Links */}
       <footer aria-label="Ссылки и поддержка" className="pt-2 pb-6 flex items-center justify-center gap-3">
         <button
+          type="button"
           onClick={() => handleOpenLink('https://t.me/DarkMSAL_supportbot')}
-          className="px-4 py-2.5 rounded-xl bg-surface dark:bg-[#1C2433] hover:bg-slate-100 dark:hover:bg-[#232D3F] border border-border/40 dark:border-[#283245]/60 text-xs font-semibold text-textMuted dark:text-[#8E98A8] hover:text-primary dark:hover:text-[#4E80EE] flex items-center space-x-2 transition-all active:scale-[0.98] shadow-sm"
+          className="px-4 py-2.5 rounded-xl bg-card dark:bg-[#1C2433] hover:bg-slate-100 dark:hover:bg-[#232D3F] border border-border/40 dark:border-[#283245]/60 text-xs font-semibold text-textMuted dark:text-[#8E98A8] hover:text-primary dark:hover:text-[#4E80EE] flex items-center space-x-2 transition-all active:scale-[0.98] shadow-sm"
         >
           <Icons.Send size={14} className="text-[#2AABEE]" />
           <span>Поддержка</span>
         </button>
 
         <button
+          type="button"
           onClick={() => handleOpenLink('https://github.com/Dewerro67/MSALKA')}
-          className="px-4 py-2.5 rounded-xl bg-surface dark:bg-[#1C2433] hover:bg-slate-100 dark:hover:bg-[#232D3F] border border-border/40 dark:border-[#283245]/60 text-xs font-semibold text-textMuted dark:text-[#8E98A8] hover:text-dark dark:hover:text-white flex items-center space-x-2 transition-all active:scale-[0.98] shadow-sm"
+          className="px-4 py-2.5 rounded-xl bg-card dark:bg-[#1C2433] hover:bg-slate-100 dark:hover:bg-[#232D3F] border border-border/40 dark:border-[#283245]/60 text-xs font-semibold text-textMuted dark:text-[#8E98A8] hover:text-dark dark:hover:text-white flex items-center space-x-2 transition-all active:scale-[0.98] shadow-sm"
         >
           <Icons.Code2 size={14} />
           <span>Исходники</span>

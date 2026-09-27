@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useAuth } from './AuthContext';
 import {
   scheduleService,
@@ -35,9 +35,11 @@ export const SyncProvider = ({ children }) => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncError, setSyncError] = useState(null);
 
-  const today = new Date();
-  const todayISO = formatISODate(today);
-  const currentMonday = getMondayOfWeek(today);
+  const todayISO = formatISODate(new Date());
+  // Стабильная ссылка на понедельник: иначе syncAll пересоздаётся на каждом рендере
+  // и эффект начальной синхронизации крутится в бесконечном цикле.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const currentMonday = useMemo(() => getMondayOfWeek(new Date()), [todayISO]);
 
   // 1. Synchronously pre-seed from cache for 0ms cold-start
   const [dashboardData, setDashboardData] = useState(() => {

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { Card } from '../../components/common/Card';
 import { Icons } from '../../components/common/Icons';
@@ -24,11 +24,13 @@ export const LoginPage = () => {
 
   const { login } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const handleToggleConsent = (checked) => {
     setIsLegalAccepted(checked);
     if (checked) {
       localStorage.setItem(LEGAL_ACCEPTED_KEY, String(Date.now()));
+      if (consentError) setErrorMessage('');
       setConsentError(false);
     } else {
       localStorage.removeItem(LEGAL_ACCEPTED_KEY);
@@ -52,19 +54,22 @@ export const LoginPage = () => {
     setIsLoading(true);
     setErrorMessage('');
 
-    const result = await login(username, password);
+    const result = await login(username.trim(), password);
     setIsLoading(false);
 
     if (result.success) {
       localStorage.setItem(LEGAL_ACCEPTED_KEY, String(Date.now()));
-      navigate('/');
+      // Возвращаем на страницу, с которой перенаправили на вход (deep link)
+      const fromPath = location.state?.from?.pathname;
+      navigate(fromPath && fromPath !== '/login' ? fromPath : '/', { replace: true });
     } else {
       setErrorMessage(result.error || 'Ошибка входа в систему');
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-bg dark:bg-[#12151B] transition-colors duration-200">
+    <div className="h-full w-full overflow-y-auto bg-bg dark:bg-[#12151B] transition-colors duration-200">
+    <div className="min-h-full flex items-center justify-center p-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
       <div className="max-w-md w-full">
         {/* University Branding */}
         <div className="text-center mb-8 flex flex-col items-center">
@@ -88,7 +93,7 @@ export const LoginPage = () => {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-xs font-bold uppercase tracking-wider mb-2 text-textMuted dark:text-[#8E98A8]">
+              <label htmlFor="login-username" className="block text-xs font-bold uppercase tracking-wider mb-2 text-textMuted dark:text-[#8E98A8]">
                 Логин
               </label>
               <div className="relative">
@@ -96,7 +101,11 @@ export const LoginPage = () => {
                   <Icons.User size={18} />
                 </div>
                 <input
+                  id="login-username"
+                  name="username"
                   type="text"
+                  autoComplete="username"
+                  spellCheck={false}
                   required
                   placeholder="Логин"
                   value={username}
@@ -109,7 +118,7 @@ export const LoginPage = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-bold uppercase tracking-wider mb-2 text-textMuted dark:text-[#8E98A8]">
+              <label htmlFor="login-password" className="block text-xs font-bold uppercase tracking-wider mb-2 text-textMuted dark:text-[#8E98A8]">
                 Пароль
               </label>
               <div className="relative">
@@ -117,7 +126,13 @@ export const LoginPage = () => {
                   <Icons.Key size={18} />
                 </div>
                 <input
+                  id="login-password"
+                  name="password"
                   type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
                   required
                   placeholder="••••••••"
                   value={password}
@@ -127,6 +142,8 @@ export const LoginPage = () => {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? 'Скрыть пароль' : 'Показать пароль'}
+                  title={showPassword ? 'Скрыть пароль' : 'Показать пароль'}
                   className="absolute inset-y-0 right-0 pr-3 flex items-center text-textMuted dark:text-[#8E98A8] hover:text-dark dark:hover:text-white"
                 >
                   {showPassword ? <Icons.EyeOff size={18} /> : <Icons.Eye size={18} />}
@@ -147,7 +164,7 @@ export const LoginPage = () => {
                   onChange={(e) => handleToggleConsent(e.target.checked)}
                   className="mt-0.5 w-4 h-4 rounded text-primary focus:ring-primary border-border dark:border-gray-600 dark:bg-gray-800 cursor-pointer shrink-0"
                 />
-                <span className="text-xs text-text dark:text-[#CBD5E1] leading-relaxed">
+                <span className="text-xs text-dark dark:text-[#CBD5E1] leading-relaxed">
                   Я прочитал(а) и принимаю{' '}
                   <button
                     type="button"
@@ -177,8 +194,8 @@ export const LoginPage = () => {
 
             <button
               type="submit"
-              disabled={isLoading || !isLegalAccepted}
-              className="w-full py-3.5 px-4 bg-primary dark:bg-[#1E6685] hover:bg-primary/90 dark:hover:bg-[#1E6685]/90 text-white font-bold rounded-xl shadow-lg shadow-primary/20 dark:shadow-none transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2 active:scale-[0.99]"
+              disabled={isLoading}
+              className={`w-full py-3.5 px-4 bg-primary dark:bg-[#1E6685] hover:bg-primary/90 dark:hover:bg-[#1E6685]/90 text-white font-bold rounded-xl shadow-lg shadow-primary/20 dark:shadow-none transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2 active:scale-[0.99] ${!isLegalAccepted ? 'opacity-60' : ''}`}
             >
               {isLoading ? (
                 <>
@@ -198,6 +215,8 @@ export const LoginPage = () => {
         <p className="text-center text-xs text-textMuted dark:text-[#8E98A8] mt-8">
           Прямое защищённое соединение с серверами МГЮА без посредников
         </p>
+      </div>
+
       </div>
 
       {/* Terms and Privacy Modal */}
