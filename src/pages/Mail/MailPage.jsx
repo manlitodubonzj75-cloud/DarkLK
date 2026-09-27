@@ -58,6 +58,58 @@ export const MailPage = () => {
     subject: '',
     body: ''
   });
+  const [recipientSuggestions, setRecipientSuggestions] = useState([]);
+  const [isSearchingRecipients, setIsSearchingRecipients] = useState(false);
+  const [showRecipientDropdown, setShowRecipientDropdown] = useState(false);
+  const searchDebounceRef = useRef(null);
+  const recipientInputWrapperRef = useRef(null);
+
+  // Recipient search handler with 300ms debounce
+  const handleRecipientInputChange = (val) => {
+    setComposeData(prev => ({ ...prev, to: val }));
+    setShowRecipientDropdown(true);
+
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+    }
+
+    const trimmed = val.trim();
+    if (trimmed.length < 2) {
+      setRecipientSuggestions([]);
+      setIsSearchingRecipients(false);
+      return;
+    }
+
+    setIsSearchingRecipients(true);
+    searchDebounceRef.current = setTimeout(async () => {
+      try {
+        const results = await mailService.searchRecipients(trimmed);
+        setRecipientSuggestions(results);
+      } catch (err) {
+        console.warn('[MailPage] searchRecipients warning:', err);
+        setRecipientSuggestions([]);
+      } finally {
+        setIsSearchingRecipients(false);
+      }
+    }, 300);
+  };
+
+  const handleSelectRecipient = (recipient) => {
+    setComposeData(prev => ({ ...prev, to: recipient.email }));
+    setShowRecipientDropdown(false);
+    setRecipientSuggestions([]);
+  };
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (recipientInputWrapperRef.current && !recipientInputWrapperRef.current.contains(e.target)) {
+        setShowRecipientDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Check Mail Auth on Mount with Silent LK Auto-Login
   useEffect(() => {
@@ -862,15 +914,65 @@ export const MailPage = () => {
 
             {/* Body */}
             <form onSubmit={handleSendSubmit} className="flex-1 flex flex-col p-4 space-y-3 overflow-y-auto">
-              <div>
-                <input
-                  type="email"
-                  value={composeData.to}
-                  onChange={(e) => setComposeData(prev => ({ ...prev, to: e.target.value }))}
-                  placeholder="Кому: ivanov@msal.ru"
-                  required
-                  className="w-full px-3.5 py-2 rounded-xl bg-gray-50 dark:bg-[#151922] border border-gray-200 dark:border-[#283245] text-xs sm:text-sm text-gray-900 dark:text-white focus:outline-none focus:border-primary"
-                />
+              <div className="relative" ref={recipientInputWrapperRef}>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={composeData.to}
+                    onChange={(e) => handleRecipientInputChange(e.target.value)}
+                    onFocus={() => {
+                      if (composeData.to.trim().length >= 2) setShowRecipientDropdown(true);
+                    }}
+                    placeholder="Кому: введите фамилию (Иванов) или email"
+                    required
+                    autoComplete="off"
+                    className="w-full px-3.5 py-2 rounded-xl bg-gray-50 dark:bg-[#151922] border border-gray-200 dark:border-[#283245] text-xs sm:text-sm text-gray-900 dark:text-white focus:outline-none focus:border-primary pr-9"
+                  />
+                  {isSearchingRecipients && (
+                    <div className="absolute right-3 top-2.5 text-primary">
+                      <Icons.RefreshCw className="w-4 h-4 animate-spin" />
+                    </div>
+                  )}
+                </div>
+
+                {/* Recipient Suggestions Dropdown */}
+                {showRecipientDropdown && (recipientSuggestions.length > 0 || isSearchingRecipients) && (
+                  <div className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-white dark:bg-[#1A1F2B] border border-gray-200 dark:border-[#283245] rounded-2xl shadow-xl max-h-60 overflow-y-auto divide-y divide-gray-100 dark:divide-[#283245]">
+                    {isSearchingRecipients && recipientSuggestions.length === 0 ? (
+                      <div className="p-3 text-center text-xs text-gray-400">
+                        Поиск в адресной книге (GAL)...
+                      </div>
+                    ) : (
+                      recipientSuggestions.map((rec) => (
+                        <div
+                          key={rec.email || rec.id}
+                          onClick={() => handleSelectRecipient(rec)}
+                          className="p-2.5 sm:p-3 hover:bg-gray-50 dark:hover:bg-[#202738] cursor-pointer transition-colors flex items-center justify-between space-x-3"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center space-x-2">
+                              <span className="text-xs sm:text-sm font-bold text-gray-900 dark:text-white truncate">
+                                {rec.displayName}
+                              </span>
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                                rec.isTeacher
+                                  ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
+                                  : 'bg-primary/10 text-primary dark:text-sky-400 border border-primary/20'
+                              }`}>
+                                {rec.isTeacher ? 'Преподаватель' : 'Студент'}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate mt-0.5 font-mono">
+                              {rec.email}
+                              {rec.department ? ` • ${rec.department}` : ''}
+                            </div>
+                          </div>
+                          <Icons.Plus className="w-4 h-4 text-gray-400 shrink-0" />
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
               </div>
 
               <div>

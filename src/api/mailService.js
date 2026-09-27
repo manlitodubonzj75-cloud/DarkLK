@@ -578,7 +578,187 @@ export const mailService = {
    */
   async getAttachment(attachmentId, fileName, contentType) {
     return await mailClient.downloadAttachment(attachmentId, fileName, contentType);
-  }
+  },
+
+  /**
+   * Cached address list id from GetPeopleFilters
+   */
+  _cachedAddressListId: null,
+
+  /**
+   * Search recipients (students, teachers, staff) via Exchange Global Address List (GAL) / FindPeople
+   * Supports resolving by surname / name (e.g. 'Иванов') returning matches with email addresses and roles.
+   */
+  async searchRecipients(query) {
+    if (!query || typeof query !== 'string' || query.trim().length < 2) {
+      return [];
+    }
+
+    const trimmed = query.trim();
+
+    // Strategy 1: FindPeople with QueryString
+    try {
+      const payload = {
+        __type: 'FindPeopleJsonRequest:#Exchange',
+        Header: {
+          __type: 'JsonRequestHeaders:#Exchange',
+          RequestServerVersion: 'Exchange2013',
+          TimeZoneContext: {
+            __type: 'TimeZoneContext:#Exchange',
+            TimeZoneDefinition: {
+              __type: 'TimeZoneDefinitionType:#Exchange',
+              Id: 'UTC'
+            }
+          }
+        },
+        Body: {
+          __type: 'FindPeopleRequest:#Exchange',
+          PersonaShape: {
+            __type: 'PersonaResponseShape:#Exchange',
+            BaseShape: 'Default'
+          },
+          IndexedPageItemView: {
+            __type: 'IndexedPageView:#Exchange',
+            BasePoint: 'Beginning',
+            Offset: 0,
+            MaxEntriesReturned: 30
+          },
+          QueryString: trimmed,
+          SearchScope: 'All'
+        }
+      };
+
+      if (this._cachedAddressListId) {
+        payload.Body.ParentFolderId = {
+          __type: 'TargetFolderId:#Exchange',
+          BaseFolderId: {
+            __type: 'AddressListId:#Exchange',
+            Id: this._cachedAddressListId
+          }
+        };
+      }
+
+      const res = await mailClient.serviceCall('FindPeople', payload);
+      const resultSet = res?.Body?.ResultSet || res?.Body?.ResponseMessages?.Items?.[0]?.ResultSet || [];
+
+      if (Array.isArray(resultSet) && resultSet.length > 0) {
+        return this._formatPersonas(resultSet);
+      }
+    } catch (err) {
+      console.warn('[MailService] FindPeople direct search failed, trying with GetPeopleFilters:', err.message);
+    }
+
+    // Strategy 2: If address list was not cached, try GetPeopleFilters to locate Global Address List ID
+    try {
+      if (!this._cachedAddressListId) {
+        const filtersRes = await mailClient.serviceCall('GetPeopleFilters', {});
+        const filters = Array.isArray(filtersRes?.Body) ? filtersRes.Body : (filtersRes?.Body?.AddressLists || filtersRes?.Body?.Filters || []);
+        if (Array.isArray(filters) && filters.length > 0) {
+          const gal = filters.find(f => (f.DisplayName || '').toLowerCase().includes('global') || (f.DisplayName || '').toLowerCase().includes('все') || (f.DisplayName || '').toLowerCase().includes('адрес'));
+          this._cachedAddressListId = gal?.FolderId?.Id || filters[0]?.FolderId?.Id || filters[0]?.Id;
+        }
+      }
+
+      if (this._cachedAddressListId) {
+        const retryPayload = {
+          __type: 'FindPeopleJsonRequest:#Exchange',
+          Header: {
+            __type: 'JsonRequestHeaders:#Exchange',
+            RequestServerVersion: 'Exchange2013'
+          },
+          Body: {
+            __type: 'FindPeopleRequest:#Exchange',
+            PersonaShape: {
+              __type: 'PersonaResponseShape:#Exchange',
+              BaseShape: 'Default'
+            },
+            IndexedPageItemView: {
+              __type: 'IndexedPageView:#Exchange',
+              BasePoint: 'Beginning',
+              Offset: 0,
+              MaxEntriesReturned: 30
+            },
+            ParentFolderId: {
+              __type: 'TargetFolderId:#Exchange',
+              BaseFolderId: {
+                __type: 'AddressListId:#Exchange',
+                Id: this._cachedAddressListId
+              }
+            },
+            QueryString: trimmed
+          }
+        };
+        const retryRes = await mailClient.serviceCall('FindPeople', retryPayload);
+        const retryResults = retryRes?.Body?.ResultSet || retryRes?.Body?.ResponseMessages?.Items?.[0]?.ResultSet || [];
+        if (Array.isArray(retryResults) && retryResults.length > 0) {
+          return this._formatPersonas(retryResults);
+        }
+      }
+    } catch (filterErr) {
+      console.warn('[MailService] GetPeopleFilters / FindPeople fallback notice:', filterErr.message);
+    }
+
+    // Strategy 3: ResolveNames fallback
+    try {
+      const resolvePayload = {
+        __type: 'ResolveNamesJsonRequest:#Exchange',
+        Header: {
+          __type: 'JsonRequestHeaders:#Exchange',
+          RequestServerVersion: 'Exchange2013'
+        },
+        Body: {
+          __type: 'ResolveNamesRequest:#Exchange',
+          ReturnFullContactData: true,
+          SearchScope: 'ActiveDirectory',
+          UnresolvedEntry: trimmed
+        }
+      };
+      const resResolve = await mailClient.serviceCall('ResolveNames', resolvePayload);
+      const resolutionSet = resResolve?.Body?.ResponseMessages?.Items?.[0]?.ResolutionSet?.Resolution || [];
+      if (Array.isArray(resolutionSet) && resolutionSet.length > 0) {
+        return resolutionSet.map(r => {
+          const mb = r.Mailbox || {};
+          const email = mb.EmailAddress || '';
+          const name = mb.Name || email;
+          const isTeacher = !email.toLowerCase().startsWith('s') && !name.toLowerCase().startsWith('s');
+          return {
+            id: email || name,
+            displayName: name,
+            email: email,
+            title: r.Contact?.JobTitle || (isTeacher ? 'Преподаватель / Сотрудник' : 'Студент'),
+            department: r.Contact?.Department || '',
+            isTeacher
+          };
+        }).filter(r => r.email);
+      }
+    } catch (resolveErr) {
+      console.warn('[MailService] ResolveNames notice:', resolveErr.message);
+    }
+
+    return [];
+  },
+
+  _formatPersonas(resultSet) {
+    const list = [];
+    for (const p of resultSet) {
+      const email = p.EmailAddress?.EmailAddress || p.EmailAddresses?.[0]?.EmailAddress;
+      if (!email) continue;
+      const displayName = p.DisplayName || p.EmailAddress?.Name || email;
+      const isStudent = email.toLowerCase().startsWith('s') || (/^[sс]d{7}/i).test(email);
+      const isTeacher = !isStudent;
+
+      list.push({
+        id: p.PersonaId?.Id || email,
+        displayName: displayName,
+        email: email,
+        title: p.Title || (isTeacher ? 'Преподаватель / Сотрудник' : 'Студент'),
+        department: p.Department || '',
+        isTeacher
+      });
+    }
+    return list;
+  },
+
 };
 
 export default mailService;
