@@ -1,17 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import * as Icons from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { lkService, formatISODate, formatLessonTime, getMondayOfWeek } from '../../api';
-import { cacheService } from '../../api';
+import {
+  lkService,
+  formatISODate,
+  getMondayOfWeek,
+  formatLessonTime,
+  cacheService
+} from '../../api';
+import { Card } from '../../components/common/Card';
+import { Badge } from '../../components/common/Badge';
+import { Icons } from '../../components/common/Icons';
+import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 
-function extractTodayLessons(weekData, todayISO) {
-  if (!Array.isArray(weekData) || weekData.length === 0) return null;
-  const todayItem = weekData.find(day => {
-    const title = day.title || day.date;
-    if (!title) return false;
-    return title === todayISO || title.startsWith(todayISO);
-  });
+function extractTodayLessons(scheduleList, todayISO) {
+  if (!Array.isArray(scheduleList) || scheduleList.length === 0) return null;
+  const todayItem = scheduleList.find(day => day.title === todayISO);
   return (todayItem && Array.isArray(todayItem.data)) ? todayItem.data : [];
 }
 
@@ -43,19 +47,19 @@ export const DashboardPage = () => {
   const [stats, setStats] = useState(() => {
     const cachedStudentInfo = cacheService.get('student_info');
     const cachedProgress = cacheService.get('progress_with_lessons_latest');
-    let ratingVal = cachedStudentInfo?.reting ?? cachedStudentInfo?.rating ?? cachedProgress?.studentInfo?.reting ?? cachedProgress?.rating;
+    let ratingVal = cachedStudentInfo?.reting ?? cachedStudentInfo?.rating ?? user?.rating ?? user?.reting ?? cachedProgress?.studentInfo?.reting ?? cachedProgress?.rating;
     if ((ratingVal === undefined || ratingVal === null || ratingVal === '—') && cachedProgress?.gpa && cachedProgress.gpa !== '—') {
       ratingVal = cachedProgress.gpa;
     }
     if (!ratingVal) ratingVal = '—';
-    const passesVal = cachedProgress?.passes ?? cachedStudentInfo?.passes ?? 0;
+    const passesVal = cachedProgress?.passes ?? cachedStudentInfo?.passes ?? user?.passes ?? 0;
     const missedLessons = Array.isArray(cachedProgress?.missedLessons) ? cachedProgress.missedLessons : [];
 
     return {
       rating: ratingVal,
       passes: passesVal,
       missedLessons,
-      loading: !cachedStudentInfo && !cachedProgress
+      loading: ratingVal === '—'
     };
   });
 
@@ -96,19 +100,24 @@ export const DashboardPage = () => {
 
         if (!isMounted) return;
 
-        // Process rating/GPA and absences
-        const studentInfo = studentInfoResp.status === 'fulfilled' ? studentInfoResp.value : null;
-        const progressVal = progressInfo.status === 'fulfilled' ? progressInfo.value : null;
-        let ratingVal = studentInfo?.reting ?? studentInfo?.rating ?? progressVal?.studentInfo?.reting ?? progressVal?.rating;
+        // Process rating/GPA and absences with persistent cache fallback
+        const studentInfo = (studentInfoResp.status === 'fulfilled' && studentInfoResp.value)
+          ? studentInfoResp.value
+          : (cacheService.get('student_info') || {});
+
+        const progressVal = (progressInfo.status === 'fulfilled' && progressInfo.value)
+          ? progressInfo.value
+          : (cacheService.get('progress_with_lessons_latest') || null);
+
+        let ratingVal = studentInfo?.reting ?? studentInfo?.rating ?? user?.rating ?? user?.reting ?? progressVal?.studentInfo?.reting ?? progressVal?.rating;
         if ((ratingVal === undefined || ratingVal === null || ratingVal === '—') && progressVal?.gpa && progressVal.gpa !== '—') {
           ratingVal = progressVal.gpa;
         }
-        if (!ratingVal) ratingVal = '—';
-        const passesVal = progressVal?.passes ?? studentInfo?.passes ?? 0;
+        const passesVal = progressVal?.passes ?? studentInfo?.passes ?? user?.passes ?? 0;
         const missedLessons = Array.isArray(progressVal?.missedLessons) ? progressVal.missedLessons : [];
 
         setStats(prev => ({
-          rating: ratingVal || prev.rating || '—',
+          rating: (ratingVal && ratingVal !== '—') ? ratingVal : (prev.rating !== '—' ? prev.rating : ratingVal || '—'),
           passes: passesVal ?? prev.passes ?? 0,
           missedLessons: missedLessons.length > 0 ? missedLessons : (prev.missedLessons || []),
           loading: false
@@ -139,286 +148,258 @@ export const DashboardPage = () => {
 
   const QUICK_ACTIONS = isCollege
     ? [
-        { title: 'Расписание', icon: Icons.Calendar, path: '/schedule', color: 'text-primary dark:text-[#4E80EE] bg-primary/10 dark:bg-[#4E80EE]/10' },
-        { title: 'Успеваемость', icon: Icons.Award, path: '/grades', color: 'text-secondary dark:text-emerald-400 bg-secondary/10 dark:bg-emerald-400/10' },
-        { title: 'Зачётка', icon: Icons.BookOpen, path: '/recordbook', color: 'text-accent dark:text-cyan-400 bg-accent/10 dark:bg-cyan-400/10' },
-        { title: 'Группа', icon: Icons.Users, path: '/groupmates', color: 'text-violet-500 dark:text-violet-400 bg-violet-500/10 dark:bg-violet-400/10' }
+        { title: 'Расписание', icon: Icons.Calendar, to: '/schedule', color: 'bg-blue-500/10 text-blue-500 hover:bg-blue-500/20' },
+        { title: 'Оценки', icon: Icons.GraduationCap, to: '/grades', color: 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20' },
+        { title: 'Зачётка', icon: Icons.BookOpen, to: '/recordbook', color: 'bg-indigo-500/10 text-indigo-500 hover:bg-indigo-500/20' },
+        { title: 'Почта MSAL', icon: Icons.Mail, to: '/mail', color: 'bg-sky-500/10 text-sky-500 hover:bg-sky-500/20' },
+        { title: 'Настройки', icon: Icons.Settings, to: '/settings', color: 'bg-purple-500/10 text-purple-500 hover:bg-purple-500/20' },
       ]
     : [
-        { title: 'Расписание', icon: Icons.Calendar, path: '/schedule', color: 'text-primary dark:text-[#4E80EE] bg-primary/10 dark:bg-[#4E80EE]/10' },
-        { title: 'Успеваемость', icon: Icons.Award, path: '/grades', color: 'text-secondary dark:text-emerald-400 bg-secondary/10 dark:bg-emerald-400/10' },
-        { title: 'Зачётка', icon: Icons.BookOpen, path: '/recordbook', color: 'text-accent dark:text-cyan-400 bg-accent/10 dark:bg-cyan-400/10' },
-        { title: 'Консультации', icon: Icons.HelpCircle, path: '/consultations', color: 'text-amber-500 dark:text-amber-400 bg-amber-500/10 dark:bg-amber-400/10' },
-        { title: 'Группа', icon: Icons.Users, path: '/groupmates', color: 'text-violet-500 dark:text-violet-400 bg-violet-500/10 dark:bg-violet-400/10' }
+        { title: 'Расписание', icon: Icons.Calendar, to: '/schedule', color: 'bg-blue-500/10 text-blue-500 hover:bg-blue-500/20' },
+        { title: 'Оценки', icon: Icons.GraduationCap, to: '/grades', color: 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20' },
+        { title: 'Зачётка', icon: Icons.BookOpen, to: '/recordbook', color: 'bg-indigo-500/10 text-indigo-500 hover:bg-indigo-500/20' },
+        { title: 'Почта MSAL', icon: Icons.Mail, to: '/mail', color: 'bg-sky-500/10 text-sky-500 hover:bg-sky-500/20' },
+        { title: 'Отработки', icon: Icons.UserCheck, to: '/consultations', color: 'bg-amber-500/10 text-amber-500 hover:bg-amber-500/20' },
+        { title: 'Настройки', icon: Icons.Settings, to: '/settings', color: 'bg-purple-500/10 text-purple-500 hover:bg-purple-500/20' },
       ];
-
-  const handleOpenLink = (url) => {
-    try {
-      if (window.Capacitor?.isNativePlatform?.()) {
-        window.open(url, '_system');
-      } else {
-        window.open(url, '_blank', 'noopener,noreferrer');
-      }
-    } catch (_) {
-      window.location.href = url;
-    }
-  };
 
   return (
     <div className="space-y-6">
-      {/* Student Welcome Banner */}
-      <div className="bg-gradient-to-r from-primary to-accent dark:from-[#1E6685] dark:to-[#0F2A38] rounded-2xl p-6 text-white shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <span className="text-xs font-semibold px-2.5 py-1 bg-white/20 rounded-full inline-block mb-2">
-            {isCollege ? 'Колледж МГЮА' : 'Студент МГЮА'}
-          </span>
-          <h1 className="text-xl sm:text-2xl font-bold">
-            {user?.name || 'Студент'}
-          </h1>
-          <p className="text-sm text-white/80 mt-1">
-            {user?.group ? `Группа ${user.group}` : 'Информация об учебной группе'}
-          </p>
+      {/* Welcome Card */}
+      <div className="bg-gradient-to-r from-primary to-accent rounded-3xl p-6 text-white shadow-xl relative overflow-hidden">
+        <div className="absolute right-0 top-0 bottom-0 opacity-10 flex items-center pr-6 pointer-events-none">
+          <Icons.GraduationCap size={160} />
         </div>
-        <div className="text-left sm:text-right border-t sm:border-t-0 border-white/20 pt-3 sm:pt-0">
-          <p className="text-xs text-white/80">Сегодня</p>
-          <p className="text-sm font-semibold capitalize">
-            {now.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}
+        <div className="relative z-10">
+          <Badge variant="accent" className="bg-white/20 text-white border-0 mb-3 px-3 py-1">
+            Личный кабинет • {isCollege ? 'Колледж' : 'Бакалавриат / Специалитет'}
+          </Badge>
+          <h1 className="text-2xl sm:text-3xl font-black tracking-tight mb-2 text-white">
+            Привет, {user?.name?.split(' ')[1] || user?.name || 'студент'}! 👋
+          </h1>
+          <p className="text-white/80 text-sm max-w-lg">
+            Группа <span className="font-semibold text-white">{user?.group || '—'}</span> • {user?.course ? `${user.course} курс` : 'Студент МГЮА'}
           </p>
         </div>
       </div>
 
-      {/* Metrics Row */}
-      <section aria-label="Учебная сводка">
-        <div className={`grid ${isCollege ? 'grid-cols-3' : 'grid-cols-4'} gap-3`}>
-          <div className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between">
-            <span className="text-xs text-textMuted dark:text-[#8E98A8]">Курс</span>
-            <span className="text-2xl font-bold text-text dark:text-[#F1F5F9] mt-1">
-              {user?.course || '1'}
-            </span>
+      {/* Stats Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <Card className="flex items-center space-x-3 p-4">
+          <div className="w-10 h-10 rounded-2xl bg-blue-500/10 text-blue-500 flex items-center justify-center shrink-0">
+            <Icons.Layers size={20} />
           </div>
-          {!isCollege && (
-            <div className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between">
-              <span className="text-xs text-textMuted dark:text-[#8E98A8]">Семестр</span>
-              <span className="text-2xl font-bold text-text dark:text-[#F1F5F9] mt-1">
-                {user?.semester || '1'}
-              </span>
-            </div>
-          )}
-          <div className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between">
-            <div className="flex items-center justify-between text-secondary dark:text-emerald-400">
-              <span className="text-xs text-textMuted dark:text-[#8E98A8]">
-                {isCollege ? 'Средний балл' : 'Рейтинг'}
-              </span>
-              {isCollege ? <Icons.GraduationCap size={16} /> : <Icons.Award size={16} />}
-            </div>
-            <span className="text-2xl font-bold text-text dark:text-[#F1F5F9] mt-1">
-              {stats.loading ? '—' : stats.rating}
-            </span>
+          <div className="min-w-0">
+            <p className="text-xs text-textMuted dark:text-[#8E98A8] font-medium">Курс</p>
+            <p className="text-lg font-bold text-dark dark:text-white truncate">
+              {user?.course || '—'}
+            </p>
           </div>
-          <div
-            onClick={isCollege ? () => setShowMissedModal(true) : undefined}
-            role={isCollege ? 'button' : undefined}
-            tabIndex={isCollege ? 0 : undefined}
-            onKeyDown={isCollege ? (e) => (e.key === 'Enter' || e.key === ' ') && setShowMissedModal(true) : undefined}
-            className={`bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between ${
-              isCollege
-                ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-[#232D3F] transition-colors focus:outline-none focus:ring-2 focus:ring-primary dark:focus:ring-[#4E80EE]'
-                : ''
-            }`}
-          >
-            <div className="flex items-center justify-between text-rose-500">
-              <span className="text-xs text-textMuted dark:text-[#8E98A8]">
-                {isCollege ? 'Пропуски' : 'Пропуски (ч)'}
-              </span>
-              <Icons.Clock size={16} />
-            </div>
-            <div className="flex items-baseline justify-between mt-1">
-              <span className="text-2xl font-bold text-text dark:text-[#F1F5F9]">
-                {stats.loading ? '—' : stats.passes}
-              </span>
-              {isCollege && (
-                <span className="text-[10px] text-primary dark:text-[#4E80EE] font-medium ml-1">
-                  детали →
-                </span>
+        </Card>
+
+        <Card className="flex items-center space-x-3 p-4">
+          <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-500 flex items-center justify-center shrink-0">
+            <Icons.Award size={20} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs text-textMuted dark:text-[#8E98A8] font-medium">Семестр</p>
+            <p className="text-lg font-bold text-dark dark:text-white truncate">
+              {user?.semester || '—'}
+            </p>
+          </div>
+        </Card>
+
+        <Card className="flex items-center space-x-3 p-4">
+          <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 text-indigo-500 flex items-center justify-center shrink-0">
+            <Icons.Star size={20} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs text-textMuted dark:text-[#8E98A8] font-medium">
+              {isCollege ? 'Ср. балл' : 'Рейтинг'}
+            </p>
+            <p className="text-lg font-bold text-dark dark:text-white truncate">
+              {stats.loading ? '...' : (stats.rating !== '—' && stats.rating !== undefined && stats.rating !== null ? stats.rating : '—')}
+            </p>
+          </div>
+        </Card>
+
+        <Card
+          onClick={() => {
+            if (stats.missedLessons.length > 0) setShowMissedModal(true);
+          }}
+          className={`flex items-center space-x-3 p-4 transition-all ${
+            stats.missedLessons.length > 0
+              ? 'cursor-pointer hover:border-amber-500/40 hover:bg-amber-500/5 active:scale-[0.98]'
+              : ''
+          }`}
+          title={stats.missedLessons.length > 0 ? "Нажмите для просмотра пропущенных занятий" : undefined}
+        >
+          <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${
+            stats.passes > 0 ? 'bg-amber-500/10 text-amber-500' : 'bg-slate-500/10 text-slate-400'
+          }`}>
+            <Icons.Clock size={20} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-textMuted dark:text-[#8E98A8] font-medium">Пропуски</p>
+              {stats.missedLessons.length > 0 && (
+                <span className="text-[10px] text-amber-500 font-bold ml-1">Детали →</span>
               )}
             </div>
+            <p className={`text-lg font-bold truncate ${stats.passes > 0 ? 'text-amber-500' : 'text-dark dark:text-white'}`}>
+              {stats.loading ? '...' : (isCollege ? `${stats.passes} ч.` : stats.passes)}
+            </p>
+          </div>
+        </Card>
+      </div>
+
+      {/* Missed Lessons Modal */}
+      {showMissedModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+          onClick={() => setShowMissedModal(false)}
+        >
+          <div
+            className="bg-card dark:bg-[#1F2430] border border-border dark:border-[#2B3242] rounded-3xl max-w-lg w-full max-h-[80vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-5 border-b border-border dark:border-[#2B3242] flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-8 h-8 rounded-xl bg-amber-500/10 text-amber-500 flex items-center justify-center">
+                  <Icons.AlertCircle size={18} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-dark dark:text-white">Пропущенные занятия</h3>
+                  <p className="text-xs text-textMuted dark:text-[#8E98A8]">Всего пропущено: {stats.passes} ч.</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowMissedModal(false)}
+                className="p-1.5 rounded-xl text-textMuted hover:text-dark dark:hover:text-white hover:bg-bg dark:hover:bg-[#262D3D] transition-colors"
+              >
+                <Icons.X size={18} />
+              </button>
+            </div>
+            <div className="p-5 overflow-y-auto space-y-3 flex-1">
+              {stats.missedLessons.map((l, i) => (
+                <div key={i} className="p-3.5 rounded-2xl bg-bg dark:bg-[#12151B] border border-border/50 dark:border-[#2B3242]/50 flex items-start space-x-3">
+                  <div className="w-7 h-7 rounded-lg bg-rose-500/10 text-rose-500 flex items-center justify-center shrink-0 mt-0.5 font-bold text-xs">
+                    Н
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="font-semibold text-xs sm:text-sm text-dark dark:text-white">{l.discipline}</p>
+                    <p className="text-[11px] text-textMuted dark:text-[#8E98A8] mt-0.5">
+                      {l.date} • {l.theme || l.type || 'Занятие'}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
-      </section>
-
-      {/* Quick Navigation Actions */}
-      <section aria-label="Быстрый доступ">
-        <h2 className="text-sm font-semibold text-textMuted dark:text-[#8E98A8] uppercase tracking-wider mb-3">
-          Быстрый доступ
-        </h2>
-        <div className={`grid grid-cols-2 ${isCollege ? 'sm:grid-cols-4' : 'sm:grid-cols-5'} gap-3`}>
-          {QUICK_ACTIONS.map(action => {
-            const Icon = action.icon;
-            return (
-              <button
-                key={action.path}
-                onClick={() => navigate(action.path)}
-                className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 hover:bg-slate-50 dark:hover:bg-[#232D3F] transition-all flex flex-col items-center justify-center text-center group active:scale-[0.98]"
-              >
-                <div className={`p-3 rounded-xl mb-2 group-hover:scale-110 transition-transform ${action.color}`}>
-                  <Icon size={22} />
-                </div>
-                <span className="text-xs font-semibold text-text dark:text-[#F1F5F9] truncate w-full">
-                  {action.title}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
+      )}
 
       {/* Today Schedule Section */}
-      <section aria-label="Расписание на сегодня">
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold text-textMuted dark:text-[#8E98A8] uppercase tracking-wider">
-              Расписание на сегодня
-            </h2>
-            <button
-              onClick={() => navigate('/schedule')}
-              className="text-xs font-semibold text-primary dark:text-[#4E80EE] hover:underline"
-            >
-              Всё расписание →
-            </button>
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <Icons.Calendar size={20} className="text-primary dark:text-[#38BDF8]" />
+            <h2 className="text-lg font-bold text-dark dark:text-white">Расписание на сегодня</h2>
           </div>
-
-          {isScheduleLoading ? (
-            <div className="bg-surface dark:bg-[#1C2433] p-8 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col items-center justify-center text-center">
-              <Icons.Loader2 size={24} className="animate-spin text-primary dark:text-[#4E80EE] mb-2" />
-              <p className="text-xs text-textMuted dark:text-[#8E98A8]">Загрузка расписания...</p>
-            </div>
-          ) : scheduleToday.length === 0 ? (
-            <div className="bg-surface dark:bg-[#1C2433] p-8 rounded-xl border border-border/40 dark:border-[#283245]/60 text-center">
-              <Icons.Smile size={32} className="mx-auto text-textMuted dark:text-[#8E98A8] mb-2 opacity-60" />
-              <h3 className="font-semibold text-text dark:text-[#F1F5F9] text-sm">Пар нет</h3>
-              <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-0.5">Сегодня учебных занятий не запланировано</p>
-            </div>
-          ) : (
-            <div className="space-y-2.5">
-              {scheduleToday.map((lesson, idx) => {
-                const timeStr = lesson.time || formatLessonTime(lesson.num);
-                return (
-                  <div
-                    key={idx}
-                    className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex items-start gap-3.5 hover:bg-slate-50 dark:hover:bg-[#232D3F] transition-colors"
-                  >
-                    <div className="flex flex-col items-center justify-center px-2 py-1 bg-primary/10 dark:bg-[#4E80EE]/10 rounded-lg text-primary dark:text-[#4E80EE] font-semibold text-xs shrink-0 min-w-[58px]">
-                      <span>{timeStr.split('-')[0] || timeStr}</span>
-                      <span className="text-[10px] opacity-75">{timeStr.split('-')[1] || ''}</span>
-                    </div>
-
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <h4 className="font-semibold text-text dark:text-[#F1F5F9] text-sm truncate">
-                          {lesson.name || lesson.discipline || 'Учебное занятие'}
-                        </h4>
-                        {lesson.room && (
-                          <span className="text-xs font-medium px-2 py-0.5 bg-bg dark:bg-[#12151B] border border-border/40 dark:border-[#283245]/60 rounded-md text-textMuted dark:text-[#8E98A8] shrink-0">
-                            ауд. {lesson.room}
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-3 mt-1 text-xs text-textMuted dark:text-[#8E98A8]">
-                        {lesson.type && <span>{lesson.type}</span>}
-                        {lesson.teacher && <span className="truncate">• {lesson.teacher}</span>}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          <button
+            onClick={() => navigate('/schedule')}
+            className="text-xs font-semibold text-primary dark:text-[#38BDF8] hover:underline flex items-center space-x-1"
+          >
+            <span>На неделю</span>
+            <Icons.ArrowRight size={14} />
+          </button>
         </div>
 
-        {/* Modal for College Missed Lessons */}
-        {isCollege && showMissedModal && (
-          <div
-            role="dialog"
-            aria-modal="true"
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
-            onTouchStart={(e) => e.stopPropagation()}
-            onTouchMove={(e) => e.stopPropagation()}
-            onTouchEnd={(e) => e.stopPropagation()}
-          >
-            <div className="bg-surface dark:bg-[#1C2433] rounded-2xl border border-border/60 dark:border-[#283245] w-full max-w-lg max-h-[80vh] flex flex-col shadow-2xl overflow-hidden">
-              <div className="p-4 border-b border-border/40 dark:border-[#283245] flex items-center justify-between">
-                <div className="flex items-center space-x-2">
-                  <div className="p-1.5 rounded-lg bg-rose-500/10 text-rose-500">
-                    <Icons.AlertTriangle size={18} />
+        {isScheduleLoading ? (
+          <div className="py-12 flex justify-center">
+            <LoadingSpinner size={8} text="Загрузка расписания..." />
+          </div>
+        ) : scheduleToday.length === 0 ? (
+          <Card className="p-8 text-center">
+            <div className="w-12 h-12 rounded-full bg-emerald-500/10 text-emerald-500 flex items-center justify-center mx-auto mb-3">
+              <Icons.Coffee size={24} />
+            </div>
+            <p className="font-bold text-dark dark:text-white text-base">Сегодня занятий нет!</p>
+            <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-1">
+              Отличный повод отдохнуть или повторить пройденный материал.
+            </p>
+          </Card>
+        ) : (
+          <div className="space-y-3">
+            {scheduleToday.map((lesson, idx) => (
+              <Card
+                key={idx}
+                className={`p-4 transition-all ${
+                  lesson.isConsultation
+                    ? 'border-l-4 border-l-amber-500 bg-amber-500/5'
+                    : 'border-l-4 border-l-primary'
+                }`}
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="space-y-1">
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs font-bold text-primary dark:text-[#38BDF8]">
+                        {formatLessonTime(lesson.start, lesson.end)}
+                      </span>
+                      <Badge variant={lesson.isConsultation ? "warning" : "primary"} size="sm">
+                        {lesson.type || (lesson.isConsultation ? 'Консультация' : 'Занятие')}
+                      </Badge>
+                      {lesson.subgroup ? (
+                        <Badge variant="neutral" size="sm">
+                          {lesson.subgroup} п/г
+                        </Badge>
+                      ) : null}
+                    </div>
+                    <h3 className="font-bold text-sm sm:text-base text-dark dark:text-white">
+                      {lesson.title}
+                    </h3>
+                    {lesson.teacher && (
+                      <p className="text-xs text-textMuted dark:text-[#8E98A8] flex items-center space-x-1">
+                        <Icons.User size={12} />
+                        <span>{lesson.teacher}</span>
+                      </p>
+                    )}
                   </div>
-                  <h3 className="font-bold text-text dark:text-[#F1F5F9] text-base">Пропущенные занятия</h3>
-                </div>
-                <button
-                  onClick={() => setShowMissedModal(false)}
-                  className="p-1.5 rounded-lg text-textMuted hover:text-text hover:bg-bg dark:hover:bg-[#12151B] transition-colors"
-                >
-                  <Icons.X size={18} />
-                </button>
-              </div>
-
-              <div className="p-4 overflow-y-auto flex-1 space-y-2">
-                {stats.missedLessons && stats.missedLessons.length > 0 ? (
-                  stats.missedLessons.map((item, idx) => (
-                    <div
-                      key={idx}
-                      className="p-3 rounded-xl bg-bg dark:bg-[#12151B] border border-border/30 dark:border-[#283245]/40 flex items-start justify-between gap-3 text-xs"
-                    >
-                      <div>
-                        <div className="font-semibold text-text dark:text-[#F1F5F9]">
-                          {item.discipline || item.name || 'Занятие'}
-                        </div>
-                        <div className="text-textMuted dark:text-[#8E98A8] mt-0.5">
-                          {item.date ? new Date(item.date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}
-                          {item.type ? ` • ${item.type}` : ''}
-                        </div>
-                      </div>
-                      <span className="px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-500 font-semibold shrink-0">
-                        {item.hours ? `${item.hours} ч` : '2 ч'}
+                  {lesson.classroom && (
+                    <div className="self-start sm:self-center shrink-0">
+                      <span className="inline-flex items-center space-x-1 px-3 py-1 rounded-xl bg-bg dark:bg-[#12151B] text-dark dark:text-white font-semibold text-xs border border-border dark:border-[#2B3242]">
+                        <Icons.MapPin size={12} className="text-textMuted" />
+                        <span>ауд. {lesson.classroom}</span>
                       </span>
                     </div>
-                  ))
-                ) : (
-                  <div className="text-center py-8 text-textMuted dark:text-[#8E98A8]">
-                    <Icons.CheckCircle size={32} className="mx-auto text-secondary dark:text-emerald-400 mb-2 opacity-80" />
-                    <p className="text-xs">Детализированный список пропусков чист или ещё не загружен.</p>
-                  </div>
-                )}
-              </div>
-
-              <div className="p-4 border-t border-border/40 dark:border-[#283245] bg-bg/50 dark:bg-[#12151B]/50 flex items-center justify-between">
-                <span className="text-xs text-textMuted dark:text-[#8E98A8]">Всего пропущено:</span>
-                <span className="text-sm font-bold text-rose-500">
-                  {stats.passes} {isCollege ? 'пар' : 'ч'}
-                </span>
-              </div>
-            </div>
+                  )}
+                </div>
+              </Card>
+            ))}
           </div>
         )}
-      </section>
+      </div>
 
-      {/* Footer Support & Source Code Links */}
-      <footer aria-label="Ссылки и поддержка" className="pt-2 pb-6 flex items-center justify-center gap-3">
-        <button
-          onClick={() => handleOpenLink('https://t.me/DarkMSAL_supportbot')}
-          className="px-4 py-2.5 rounded-xl bg-surface dark:bg-[#1C2433] hover:bg-slate-100 dark:hover:bg-[#232D3F] border border-border/40 dark:border-[#283245]/60 text-xs font-semibold text-textMuted dark:text-[#8E98A8] hover:text-primary dark:hover:text-[#4E80EE] flex items-center space-x-2 transition-all active:scale-[0.98] shadow-sm"
-        >
-          <Icons.Send size={14} className="text-[#2AABEE]" />
-          <span>Поддержка</span>
-        </button>
-
-        <button
-          onClick={() => handleOpenLink('https://github.com/Dewerro67/MSALKA')}
-          className="px-4 py-2.5 rounded-xl bg-surface dark:bg-[#1C2433] hover:bg-slate-100 dark:hover:bg-[#232D3F] border border-border/40 dark:border-[#283245]/60 text-xs font-semibold text-textMuted dark:text-[#8E98A8] hover:text-dark dark:hover:text-white flex items-center space-x-2 transition-all active:scale-[0.98] shadow-sm"
-        >
-          <Icons.Code2 size={14} />
-          <span>Исходники</span>
-        </button>
-      </footer>
+      {/* Quick Navigation Grid */}
+      <div className="space-y-3">
+        <h2 className="text-lg font-bold text-dark dark:text-white">Быстрый доступ</h2>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {QUICK_ACTIONS.map((action, idx) => (
+            <Card
+              key={idx}
+              onClick={() => navigate(action.to)}
+              className="p-4 flex items-center space-x-3 cursor-pointer hover:border-primary/50 transition-all active:scale-[0.98] group"
+            >
+              <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-110 ${action.color}`}>
+                <action.icon size={20} />
+              </div>
+              <span className="font-bold text-sm text-dark dark:text-white group-hover:text-primary dark:group-hover:text-[#38BDF8] transition-colors">
+                {action.title}
+              </span>
+            </Card>
+          ))}
+        </div>
+      </div>
     </div>
   );
 };

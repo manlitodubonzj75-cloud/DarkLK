@@ -182,7 +182,7 @@ async function decryptValue(cryptoKey, cipherText) {
 
 export const cryptoStorage = {
   /**
-   * Initialize crypto storage: derives key, preloads and decrypts tokens & user profile
+   * Initialize crypto storage: derives key, preloads and decrypts core tokens & user profile
    */
   async init() {
     if (isInitialized) return true;
@@ -192,29 +192,18 @@ export const cryptoStorage = {
       try {
         const key = await getOrGenerateMasterKey();
 
-        // Preload core security keys and credentials into memory vault
-        const coreKeys = ['access_token', 'refresh_token', 'cached_user', 'saved_login', 'saved_password'];
-
-        // Detect all keys starting with msal_cache_ or matching coreKeys
-        const allKeys = Object.keys(localStorage);
-        for (const k of allKeys) {
-          if (k && (k.startsWith('msal_cache_') || coreKeys.includes(k))) {
-            const rawVal = localStorage.getItem(k);
-            if (rawVal) {
-              try {
-                const decrypted = await decryptValue(key, rawVal);
-                if (decrypted !== null && decrypted !== undefined) {
-                  memoryVault.set(k, decrypted);
-                  // Transparently upgrade legacy plaintext items to encrypted format
-                  if (!rawVal.startsWith(ENC_PREFIX)) {
-                    encryptValue(key, decrypted).then(enc => {
-                      if (enc) localStorage.setItem(k, enc);
-                    }).catch(() => {});
-                  }
-                }
-              } catch (e) {
-                console.warn(`[SecureVault] Failed to decrypt key "${k}":`, e.message);
+        // Preload only core credentials into memory vault for instant startup (< 5ms)
+        const coreKeys = ['access_token', 'refresh_token', 'cached_user', 'saved_login', 'saved_password', 'msal_owa_credentials'];
+        for (const k of coreKeys) {
+          const rawVal = localStorage.getItem(k);
+          if (rawVal) {
+            try {
+              const decrypted = await decryptValue(key, rawVal);
+              if (decrypted !== null && decrypted !== undefined) {
+                memoryVault.set(k, decrypted);
               }
+            } catch (e) {
+              console.warn(`[SecureVault] Failed to decrypt key "${k}":`, e.message);
             }
           }
         }
@@ -289,26 +278,11 @@ export const cryptoStorage = {
    */
   getItemSync(key) {
     if (!key) return null;
-    if (memoryVault.has(key)) {
-      return memoryVault.get(key);
-    }
-    // Fallback: check if unencrypted legacy item exists in localStorage
-    const raw = localStorage.getItem(key);
-    if (raw && !raw.startsWith(ENC_PREFIX)) {
-      try {
-        const parsed = JSON.parse(raw);
-        memoryVault.set(key, parsed);
-        return parsed;
-      } catch (_) {
-        memoryVault.set(key, raw);
-        return raw;
-      }
-    }
-    return null;
+    return memoryVault.get(key) || null;
   },
 
   /**
-   * Remove an item from both memory vault and disk
+   * Remove item from memory and disk
    */
   removeItem(key) {
     if (!key) return;
@@ -317,8 +291,35 @@ export const cryptoStorage = {
   },
 
   /**
-   * Fast token access for HTTP client headers
+   * Complete secure purge of all sensitive student data and tokens
    */
+  async purgeAll() {
+    memoryVault.clear();
+    const keysToRemove = [
+      'access_token',
+      'refresh_token',
+      'token',
+      'cached_user',
+      'saved_login',
+      'saved_password',
+      'msal_owa_credentials',
+      'msal_owa_session'
+    ];
+
+    const allKeys = Object.keys(localStorage);
+    for (const k of allKeys) {
+      if (k.startsWith('msal_') || keysToRemove.includes(k)) {
+        localStorage.removeItem(k);
+      }
+    }
+  },
+
+  // Token Helpers
+  setTokens(accessToken, refreshToken = null) {
+    if (accessToken) this.setItemFast('access_token', accessToken);
+    if (refreshToken) this.setItemFast('refresh_token', refreshToken);
+  },
+
   getToken() {
     return this.getItemSync('access_token');
   },
@@ -327,65 +328,27 @@ export const cryptoStorage = {
     return this.getItemSync('refresh_token');
   },
 
-  getUser() {
-    return this.getItemSync('cached_user');
-  },
-
-  getSavedCredentials() {
-    const login = this.getItemSync('saved_login') || localStorage.getItem('saved_login');
-    const password = this.getItemSync('saved_password');
-    return { login, password };
-  },
-
-  setTokens(accessToken, refreshToken) {
-    if (accessToken) this.setItemFast('access_token', accessToken);
-    if (refreshToken) this.setItemFast('refresh_token', refreshToken);
-  },
-
+  // User Profile Helpers
   setUser(userData) {
     if (userData) this.setItemFast('cached_user', userData);
   },
 
-  setSavedCredentials(login, password) {
-    if (login) this.setItemFast('saved_login', login);
-    if (password) this.setItemFast('saved_password', password);
-    try {
-      localStorage.removeItem('saved_login');
-    } catch (_) {}
+  getUser() {
+    return this.getItemSync('cached_user');
   },
 
-  /**
-   * Cryptographic shredding & complete data purge upon logout
-   * Deletes in-memory keys, clears localStorage, and rotates/wipes the IndexedDB key
-   */
-  async purgeAll() {
-    memoryVault.clear();
-
-    const coreKeys = ['access_token', 'refresh_token', 'cached_user', 'saved_login', 'saved_password'];
-
-    // Remove all cached items, credentials and tokens from localStorage
-    const keysToRemove = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k && (k.startsWith('msal_cache_') || k.startsWith('_fast_msal_cache_') || coreKeys.includes(k))) {
-        keysToRemove.push(k);
-      }
+  // Persistent Credentials for Silent Re-auth (AES-256 GCM)
+  saveCredentials(login, password) {
+    if (login && password) {
+      this.setItemFast('saved_login', login);
+      this.setItemFast('saved_password', password);
     }
-    keysToRemove.forEach(k => localStorage.removeItem(k));
+  },
 
-    // Clear key in IndexedDB so any residual ciphertext is permanently unrecoverable
-    try {
-      const db = await openKeyDatabase();
-      const tx = db.transaction(STORE_NAME, 'readwrite');
-      const store = tx.objectStore(STORE_NAME);
-      await new Promise((res) => {
-        const delReq = store.delete(MASTER_KEY_ID);
-        delReq.onsuccess = () => res();
-        delReq.onerror = () => res();
-      });
-    } catch (_) {}
-
-    masterCryptoKey = null;
-    isInitialized = false;
+  getSavedCredentials() {
+    return {
+      login: this.getItemSync('saved_login'),
+      password: this.getItemSync('saved_password')
+    };
   }
 };

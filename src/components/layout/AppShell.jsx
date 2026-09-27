@@ -1,8 +1,8 @@
 import React from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
+import * as Icons from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
-import { Icons } from '../common/Icons';
 import { Logo } from '../common/Logo';
 import { LegalModal } from '../common/LegalModal';
 import { UpdateModal } from '../common/UpdateModal';
@@ -10,11 +10,10 @@ import { updateService } from '../../api/updateService';
 import { PullToRefresh } from "../common/PullToRefresh";
 
 export const AppShell = () => {
-  const { user, logout, isCollege, isOffline, isSyncing, lastSyncTime, retrySync } = useAuth();
+  const { user, logout, isCollege, isOffline, isSyncing, retrySync, lastSyncTime } = useAuth();
   const { isDark, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
-  const isMailRoute = location.pathname.startsWith('/mail');
   const [legalModalTab, setLegalModalTab] = React.useState(null);
   const [isRefreshing, setIsRefreshing] = React.useState(false);
   const [updateInfo, setUpdateInfo] = React.useState(null);
@@ -22,6 +21,7 @@ export const AppShell = () => {
   const [showLegalGate, setShowLegalGate] = React.useState(() => {
     return !Boolean(localStorage.getItem("msal_legal_accepted_v1"));
   });
+  const [photoError, setPhotoError] = React.useState(false);
 
   const ALL_NAV_ITEMS = [
     { to: '/', label: 'Главная', icon: Icons.Home },
@@ -45,7 +45,7 @@ export const AppShell = () => {
     return name.slice(0, 2).toUpperCase();
   };
 
-  const photoUrl = (typeof user?.photo === 'string' && user.photo.trim())
+  const photoUrl = (!photoError && typeof user?.photo === 'string' && user.photo.trim())
     ? (user.photo.startsWith('http') ? user.photo : `https://lk.msal.ru:3443/${user.photo}`)
     : null;
 
@@ -104,8 +104,10 @@ export const AppShell = () => {
     }, 850);
   };
 
+  const isMailRoute = location.pathname.startsWith('/mail');
+
   return (
-    <div className="flex h-full h-[100dvh] w-full bg-bg dark:bg-[#12151B] text-dark dark:text-white font-sans overflow-hidden transition-colors duration-200">
+    <div className="flex w-full h-full min-h-0 min-w-0 bg-bg dark:bg-[#12151B] text-dark dark:text-white font-sans overflow-hidden transition-colors duration-200">
       {/* DESKTOP SIDEBAR */}
       <aside className="hidden md:flex flex-col w-64 h-full bg-primary dark:bg-[#12151B] text-white border-r border-white/10 dark:border-[#212634] shadow-xl z-20 shrink-0">
         {/* Logo */}
@@ -121,9 +123,15 @@ export const AppShell = () => {
         <div
           onClick={() => navigate('/settings')}
           className="p-4 mx-3 my-4 rounded-2xl bg-white/10 dark:bg-[#1F2430] border border-white/10 dark:border-[#283245] flex items-center space-x-3 cursor-pointer hover:bg-white/15 dark:hover:bg-[#257C9F] transition-all group"
+          title="Открыть профиль и настройки"
         >
           {photoUrl ? (
-            <img src={photoUrl} alt="Avatar" className="w-12 h-12 rounded-full object-cover border-2 border-white/30 dark:border-[#283245] shadow-inner shrink-0 group-hover:scale-105 transition-transform" />
+            <img
+              src={photoUrl}
+              alt="Avatar"
+              onError={() => setPhotoError(true)}
+              className="w-12 h-12 rounded-full object-cover border-2 border-white/30 dark:border-[#283245] shadow-inner shrink-0 group-hover:scale-105 transition-transform"
+            />
           ) : (
             <div className="w-12 h-12 rounded-full bg-accent dark:bg-[#22869A] flex items-center justify-center font-bold text-base text-white shadow-inner shrink-0 group-hover:scale-105 transition-transform">
               {getInitials(user?.name)}
@@ -169,7 +177,7 @@ export const AppShell = () => {
             className="w-full flex items-center justify-center space-x-2.5 px-3.5 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 dark:bg-[#1E2430] dark:hover:bg-[#272F3F] text-white/90 text-xs font-semibold transition-all active:scale-95 border border-white/10 dark:border-[#283245] shadow-sm disabled:opacity-50"
             title="Обновить данные расписания и оценок с сервера"
           >
-            <Icons.Refresh size={16} className={`shrink-0 ${isRefreshing ? 'animate-spin text-accent dark:text-[#38BDF8]' : ''}`} />
+            <Icons.RefreshCw size={16} className={`shrink-0 ${isRefreshing ? 'animate-spin text-accent dark:text-[#38BDF8]' : ''}`} />
             <span>{isRefreshing ? 'Обновление данных...' : 'Обновить данные'}</span>
           </button>
         </div>
@@ -209,7 +217,7 @@ export const AppShell = () => {
       </aside>
 
       {/* MAIN VIEW AREA */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden">
+      <div className="flex-1 flex flex-col h-full min-h-0 min-w-0 overflow-hidden">
         {/* Mobile Header Bar */}
         <header className="md:hidden flex items-center justify-between px-4 py-3 bg-card dark:bg-[#1F2430] border-b border-border dark:border-[#212634] z-10 shrink-0 pt-[max(0.75rem,env(safe-area-inset-top))]">
           <div
@@ -218,9 +226,14 @@ export const AppShell = () => {
             title="Открыть профиль и настройки"
           >
             {photoUrl ? (
-              <img src={photoUrl} alt="Avatar" className="w-9 h-9 rounded-full object-cover border border-accent dark:border-[#22869A]" />
+              <img
+                src={photoUrl}
+                alt="Avatar"
+                onError={() => setPhotoError(true)}
+                className="w-9 h-9 rounded-full object-cover border border-accent dark:border-[#22869A]"
+              />
             ) : (
-              <div className="w-9 h-9 rounded-full bg-accent dark:bg-[#22869A] flex items-center justify-center font-bold text-white text-xs">
+              <div className="w-9 h-9 rounded-full bg-accent dark:bg-[#22869A] flex items-center justify-center font-bold text-white text-xs shadow-inner">
                 {getInitials(user?.name)}
               </div>
             )}
@@ -253,10 +266,10 @@ export const AppShell = () => {
           </div>
         </header>
 
-        {/* Global Offline / Cached Data Banner */}
+        {/* Global Offline/Stale Banner */}
         {isOffline && (
-          <div className="bg-amber-500/15 dark:bg-amber-500/20 border-b border-amber-500/30 text-amber-800 dark:text-amber-200 px-4 py-2 flex items-center justify-between text-xs transition-all shrink-0 z-10">
-            <div className="flex items-center space-x-2 min-w-0">
+          <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-2 flex items-center justify-between text-xs text-amber-800 dark:text-amber-200 shrink-0">
+            <div className="flex items-center space-x-2 truncate">
               <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse shrink-0" />
               <span className="font-medium truncate">
                 Автономный режим • Данные из кэша (актуально на: {formatSyncTime(lastSyncTime)})
@@ -268,16 +281,16 @@ export const AppShell = () => {
               className="ml-3 shrink-0 inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 active:scale-95 text-amber-900 dark:text-amber-100 font-semibold transition-all disabled:opacity-50"
               title="Повторить попытку подключения к серверу"
             >
-              <Icons.Refresh size={12} className={isSyncing ? "animate-spin" : ""} />
+              <Icons.RefreshCw size={12} className={isSyncing ? "animate-spin" : ""} />
               <span>{isSyncing ? "Синхронизация..." : "Обновить"}</span>
             </button>
           </div>
         )}
 
         {/* Scrollable Page Body with Single Root Pull-to-Refresh */}
-        <main className="flex-1 overflow-hidden bg-bg dark:bg-[#12151B] w-full min-w-0 flex flex-col">
+        <main className="flex-1 overflow-hidden min-h-0 min-w-0 bg-bg dark:bg-[#12151B] w-full flex flex-col">
           {isMailRoute ? (
-            <div className="h-full w-full flex-1 min-w-0 overflow-hidden flex flex-col pb-16 md:pb-0">
+            <div className="h-full w-full flex-1 min-h-0 min-w-0 overflow-hidden flex flex-col">
               <Outlet />
             </div>
           ) : (
@@ -329,11 +342,13 @@ export const AppShell = () => {
         />
       )}
 
-      <UpdateModal
-        isOpen={showUpdateModal}
-        updateInfo={updateInfo}
-        onClose={() => setShowUpdateModal(false)}
-      />
+      {showUpdateModal && updateInfo && (
+        <UpdateModal
+          isOpen={true}
+          updateInfo={updateInfo}
+          onClose={() => setShowUpdateModal(false)}
+        />
+      )}
     </div>
   );
 };

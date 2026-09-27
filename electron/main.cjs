@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, session } = require('electron');
+const { app, BrowserWindow, shell, session, ipcMain } = require('electron');
 const path = require('path');
 
 // Ensure app name is properly displayed in system trays, tasks and desktop environments
@@ -21,7 +21,7 @@ function createWindow() {
       sandbox: true,
       webSecurity: true
     },
-    backgroundColor: '#0F1117',
+    backgroundColor: '#12151B',
     show: false,
   });
 
@@ -51,7 +51,11 @@ function createWindow() {
   // Completely eliminates intermediate proxies, 100% compliant with 152-FZ
   session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
     const url = details.url || '';
-    if (url.includes('lk.msal.ru') || url.includes('mail.msal.ru')) {
+    if (url.includes('mail.msal.ru')) {
+      details.requestHeaders['Origin'] = 'https://mail.msal.ru';
+      details.requestHeaders['Referer'] = 'https://mail.msal.ru/owa/';
+      details.requestHeaders['User-Agent'] = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36';
+    } else if (url.includes('lk.msal.ru')) {
       details.requestHeaders['Origin'] = 'https://lk.msal.ru';
       details.requestHeaders['Referer'] = 'https://lk.msal.ru/';
       details.requestHeaders['User-Agent'] = browserUserAgent;
@@ -66,7 +70,8 @@ function createWindow() {
 
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     const responseHeaders = { ...details.responseHeaders };
-    responseHeaders['Access-Control-Allow-Origin'] = ['*'];
+    const requestOrigin = details.requestHeaders?.['Origin'] || 'http://localhost:5173';
+    responseHeaders['Access-Control-Allow-Origin'] = [requestOrigin];
     responseHeaders['Access-Control-Allow-Headers'] = ['*'];
     responseHeaders['Access-Control-Allow-Methods'] = ['GET, POST, PUT, PATCH, DELETE, OPTIONS'];
     responseHeaders['Access-Control-Allow-Credentials'] = ['true'];
@@ -87,6 +92,49 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 }
+
+// IPC handler for Node-level mail requests (bypasses browser CORS/Cookie restrictions entirely)
+ipcMain.handle('mail-request', async (event, { url, method = 'GET', headers = {}, body = null, redirect = 'manual' }) => {
+  try {
+    const res = await globalThis.fetch(url, {
+      method,
+      headers,
+      body,
+      redirect
+    });
+
+    const status = res.status;
+    const statusText = res.statusText;
+    const ok = res.ok;
+    const headersObj = {};
+    for (const [k, v] of res.headers.entries()) {
+      headersObj[k.toLowerCase()] = v;
+    }
+
+    let setCookie = null;
+    if (res.headers.getSetCookie) {
+      setCookie = res.headers.getSetCookie();
+    } else if (res.headers.get('set-cookie')) {
+      setCookie = res.headers.get('set-cookie');
+    }
+
+    const text = await res.text();
+    return {
+      success: true,
+      status,
+      statusText,
+      ok,
+      headers: headersObj,
+      setCookie,
+      text
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: err.message
+    };
+  }
+});
 
 app.whenReady().then(() => {
   createWindow();

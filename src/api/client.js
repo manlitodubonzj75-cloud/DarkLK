@@ -1,18 +1,17 @@
 /**
- * MSAL+ API HTTP Client
- * Configured with timeout protection (AbortController), browser fingerprint alignment,
- * dynamic platform-aware X-Device-Model generation, in-flight token refresh mutex,
- * and integration with AES-GCM encrypted cryptoStorage.
+ * MSAL Client API Module
+ * Direct cross-platform client for official MSAL (МГЮА) LK API
+ * Operates without intermediate backend proxy (152-FZ zero data retention)
  */
 
-import { cryptoStorage } from './cryptoStorage.js';
+import { cryptoStorage } from './cryptoStorage';
 
-// In Electron desktop, Capacitor iOS/Android, or Userscript running on msal.ru,
-// use direct official API URL (zero proxy, 100% 152-FZ compliant).
-// In local web dev environment, use Vite proxy '/api'.
-const isUserscriptOrMsalDomain = (typeof window !== 'undefined') && (
-  Boolean(window.__DARKMSAL_USERSCRIPT__) ||
-  Boolean(window.location?.hostname?.includes('msal.ru'))
+const isUserscriptOrMsalDomain = typeof window !== 'undefined' && (
+  window.location.hostname.includes('msal.ru') ||
+  window.location.hostname === 'localhost' ||
+  window.location.protocol === 'file:' ||
+  window.location.protocol === 'capacitor:' ||
+  window.location.protocol === 'ionic:'
 );
 
 const isNativeEnv = (typeof window !== 'undefined') && (
@@ -26,71 +25,53 @@ const BASE_URL = isNativeEnv
   ? 'https://lk.msal.ru:3443'
   : (import.meta.env?.VITE_API_BASE_URL || '/api');
 
-/**
- * Detect client platform, OS and browser version to construct
- * a legitimate X-Device-Model matching the university backend expectations.
- */
-function getDeviceInfo() {
-  let os = 'GNU/Linux';
-  let clientName = 'Firefox';
-  let clientVersion = '135.0';
+// Platform metadata headers
+function getPlatformDeviceHeaders() {
+  if (typeof window === 'undefined') return {};
+
+  const isAndroid = /Android/i.test(navigator.userAgent);
+  const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const isCapacitor = Boolean(window.Capacitor?.isNativePlatform?.());
+
+  let clientName = 'Chrome';
+  if (/Firefox/i.test(navigator.userAgent)) clientName = 'Firefox';
+  else if (/Safari/i.test(navigator.userAgent) && !/Chrome/i.test(navigator.userAgent)) clientName = 'Safari';
+
+  let os = 'Desktop';
   let deviceType = 'desktop';
 
-  if (typeof navigator !== 'undefined') {
-    const ua = navigator.userAgent || '';
-    const platform = navigator.platform || '';
-
-    // Device OS
-    if (/android/i.test(ua)) {
-      os = 'Android';
-      deviceType = 'mobile';
-    } else if (/iphone|ipad|ipod/i.test(ua)) {
-      os = 'iOS';
-      deviceType = 'mobile';
-    } else if (/win/i.test(platform) || /windows/i.test(ua)) {
-      os = 'Windows';
-    } else if (/mac/i.test(platform) || /macintosh/i.test(ua)) {
-      os = 'macOS';
-    } else if (/linux/i.test(platform) || /linux/i.test(ua)) {
-      os = 'GNU/Linux';
-    }
-
-    // Client Name & Version
-    const ffMatch = ua.match(/Firefox\/(\d+[\.\d]*)/);
-    const chromeMatch = ua.match(/(?:Chrome|Chromium)\/(\d+[\.\d]*)/);
-    const safariMatch = ua.match(/Version\/(\d+[\.\d]*).*Safari/);
-
-    if (ffMatch) {
-      clientName = 'Firefox';
-      clientVersion = ffMatch[1];
-    } else if (chromeMatch) {
-      clientName = 'Chrome';
-      clientVersion = chromeMatch[1];
-    } else if (safariMatch) {
-      clientName = 'Safari';
-      clientVersion = safariMatch[1];
-    }
+  if (isAndroid || window.Capacitor?.getPlatform?.() === 'android') {
+    os = 'Android';
+    deviceType = 'mobile';
+  } else if (isIOS || window.Capacitor?.getPlatform?.() === 'ios') {
+    os = 'iOS';
+    deviceType = 'mobile';
+  } else if (navigator.platform?.includes('Mac')) {
+    os = 'macOS';
+  } else if (navigator.platform?.includes('Win')) {
+    os = 'Windows';
+  } else if (navigator.platform?.includes('Linux')) {
+    os = 'Linux';
   }
 
-  return { os, clientName, clientVersion, deviceType };
+  const deviceHeader = `ClientType: ${isCapacitor ? 'app' : 'browser'}, ClientName: ${clientName}, ClientVersion: 135.0, DeviceOS: ${os}, DeviceType: ${deviceType}`;
+
+  return {
+    'X-Device-Model': deviceHeader,
+    'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7'
+  };
 }
 
-/**
- * Standard browser headers matching the exact format expected by lk.msal.ru:3443
- */
-function getStandardHeaders(token = null) {
-  const { os, clientName, clientVersion, deviceType } = getDeviceInfo();
-  const deviceModel = `ClientType: browser, ClientName: ${clientName}, ClientVersion: ${clientVersion}, DeviceOS: ${os}, DeviceType: ${deviceType}`;
-
+function getStandardHeaders(explicitToken = null) {
   const headers = {
-    'Accept': 'application/json, text/plain, */*',
+    'Accept': 'application/json',
     'Content-Type': 'application/json',
-    'X-Device-Model': deviceModel
+    ...getPlatformDeviceHeaders()
   };
 
-  const activeToken = token || cryptoStorage.getToken() || localStorage.getItem('access_token') || localStorage.getItem('token');
-  if (activeToken) {
-    headers['Authorization'] = `Bearer ${activeToken}`;
+  const token = explicitToken || cryptoStorage.getToken() || localStorage.getItem('access_token') || localStorage.getItem('token');
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
   }
 
   return headers;
@@ -99,7 +80,7 @@ function getStandardHeaders(token = null) {
 /**
  * Wrapper around fetch with timeout via AbortController to prevent infinite hanging
  */
-async function fetchWithTimeout(url, options = {}, timeoutMs = 6500) {
+async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -147,7 +128,7 @@ export async function tryRefreshToken() {
               'Content-Type': 'application/json'
             },
             body: JSON.stringify({ refresh_token: refreshToken })
-          }, 5000);
+          }, 8000);
 
           if (response.ok) {
             const data = await response.json();
@@ -172,7 +153,7 @@ export async function tryRefreshToken() {
             method: 'POST',
             headers: getStandardHeaders(),
             body: JSON.stringify({ username: savedLogin, password: savedPassword })
-          }, 5000);
+          }, 10000);
 
           if (response.ok) {
             const data = await response.json();
@@ -212,7 +193,7 @@ export async function tryRefreshToken() {
 export async function apiClient(endpoint, options = {}) {
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const url = `${BASE_URL}${cleanEndpoint}`;
-  const timeoutMs = options.timeout || 6500;
+  const timeoutMs = options.timeout || 15000;
 
   const headers = {
     ...getStandardHeaders(options.token),
@@ -262,17 +243,11 @@ export async function apiClient(endpoint, options = {}) {
       throw err;
     }
 
-    const contentType = response.headers.get('content-type') || '';
-    if (contentType.includes('application/json')) {
-      return await response.json();
-    }
-
-    return await response.text();
+    return await response.json();
   } catch (err) {
-    if (err.message === 'UNAUTHORIZED') {
-      throw err;
+    if (err.name === 'TimeoutError' || err.status === 408) {
+      console.warn(`[Client] Network timeout on ${endpoint}`);
     }
-    console.warn(`[API] ${endpoint} request failed:`, err.message);
     throw err;
   }
 }

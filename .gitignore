@@ -23,6 +23,8 @@ out/
 
 # Note: The root "build/" folder contains application icon assets (icon.icns, icon.png)
 # required by electron-builder. It is intentionally NOT ignored.
+build/*.xcarchive
+build/*.ipa
 
 # Electron & Installer Artifacts
 *.dmg
@@ -38,17 +40,18 @@ builder-effective-config.yaml
 android/.gradle/
 android/build/
 android/app/build/
-android/capacitor-cordova-android-plugins/build/
-android/local.properties
-android/app/src/main/assets/public/
-android/app/src/main/assets/capacitor.config.json
-android/app/src/main/assets/capacitor.plugins.json
-android/app/src/main/res/xml/config.xml
-android/.externalNativeBuild/
-android/.cxx/
-android/captures/
+android/.idea/
+android/*.iml
+android/app/*.iml
 
 # Capacitor & iOS
 ios/build/
-ios/App/App/public/
-ios/App/App/capacitor.config.json
+ios/App/Pods/
+ios/App/Podfile.lock
+ios/App/App.xcworkspace/xcuserdata/
+ios/App/App.xcodeproj/project.xcworkspace/xcuserdata/
+ios/App/App.xcodeproj/xcuserdata/
+
+# OS metadata
+.DS_Store
+Thumbs.db

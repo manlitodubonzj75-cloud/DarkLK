@@ -1,50 +1,60 @@
 /**
- * DarkMSAL - OWA / Exchange 2016 Mail Service
+ * DarkMSAL - OWA Service Layer (Exchange 2016 API)
  *
- * Implements high-level email operations:
- * - Session & Credentials Management
- * - Folder navigation (Входящие, Отправленные, Черновики, Корзина, Спам)
- * - Conversation listing (FindConversation)
- * - Email detail reader (GetItem)
- * - Sending new messages (CreateItem)
- * - Deleting & marking as read
+ * Implements high-level email operations over JSON-RPC:
+ * - getFolders(): Inbox, Sent, Drafts, Deleted Items
+ * - getConversations(): modern conversation grouping with FindItem fallback
+ * - getMessage(): retrieve full email details, HTML body, attachments
+ * - sendEmail(): compose and send messages
+ * - deleteItem(): move to trash or purge
  */
 
 import { mailClient } from './mailClient.js';
 
-const DISTINGUISHED_FOLDERS = [
+export const DISTINGUISHED_FOLDERS = [
   { id: 'inbox', name: 'Входящие', icon: 'Inbox' },
   { id: 'sentitems', name: 'Отправленные', icon: 'Send' },
   { id: 'drafts', name: 'Черновики', icon: 'FileText' },
   { id: 'deleteditems', name: 'Удалённые', icon: 'Trash2' },
-  { id: 'junkemail', name: 'Спам', icon: 'AlertOctagon' },
-  { id: 'archive', name: 'Архив', icon: 'Archive' }
+  { id: 'junkemail', name: 'Нежелательные', icon: 'AlertOctagon' }
 ];
 
 export const mailService = {
   /**
-   * Check if user is authenticated with mail
-   */
-  async checkAuth() {
-    const creds = await mailClient.getStoredCredentials();
-    return {
-      isAuthenticated: Boolean(creds?.username),
-      username: creds?.username || null
-    };
-  },
-
-  /**
    * Log into Exchange OWA
    */
   async login(username, password) {
-    return await mailClient.login(username, password);
+    return mailClient.login(username, password);
   },
 
   /**
-   * Logout and clear local credentials
+   * Log out from Exchange OWA
    */
   async logout() {
-    await mailClient.logout();
+    return mailClient.logout();
+  },
+
+  /**
+   * Check if current session is authenticated
+   */
+  async checkAuth() {
+    const creds = await mailClient.getStoredCredentials();
+    if (!creds?.username) {
+      return { isAuthenticated: false, username: null };
+    }
+
+    if (!mailClient.canary) {
+      try {
+        await mailClient.reauthenticate();
+      } catch (_) {
+        return { isAuthenticated: false, username: creds.username };
+      }
+    }
+
+    return {
+      isAuthenticated: Boolean(mailClient.canary),
+      username: creds.username
+    };
   },
 
   /**
@@ -76,7 +86,6 @@ export const mailService = {
       const res = await mailClient.serviceCall('GetFolder', payload);
       const rootFolder = res?.Body?.ResponseMessages?.Items?.[0]?.Folders?.[0];
 
-      // Return default distinguished folders with fallback
       return DISTINGUISHED_FOLDERS.map((f) => ({
         id: f.id,
         name: f.name,
@@ -91,9 +100,9 @@ export const mailService = {
   },
 
   /**
-   * Get conversations in a specific folder (FindConversation)
+   * Modern OWA Conversation View (FindConversation)
    */
-  async getConversations({ folderId = 'inbox', offset = 0, limit = 20 } = {}) {
+  async getConversationsByFindConversation({ folderId = 'inbox', offset = 0, limit = 25 } = {}) {
     const isDistinguished = !folderId.includes('/') && folderId.length < 30;
 
     const parentFolderBase = isDistinguished
@@ -142,8 +151,8 @@ export const mailService = {
       const senderDisplay = senders[0] || 'Неизвестный отправитель';
 
       return {
-        id: convId,
-        itemId: itemId,
+        id: convId || itemId,
+        itemId: itemId || convId,
         subject: c.ConversationTopic || '(Без темы)',
         sender: senderDisplay,
         senders: senders,
@@ -155,6 +164,93 @@ export const mailService = {
         size: c.Size || c.GlobalSize || 0
       };
     });
+  },
+
+  /**
+   * Universal Item View (FindItem)
+   */
+  async getItemsByFindItem({ folderId = 'inbox', offset = 0, limit = 25 } = {}) {
+    const isDistinguished = !folderId.includes('/') && folderId.length < 30;
+    const parentFolderBase = isDistinguished
+      ? { __type: 'DistinguishedFolderId:#Exchange', Id: folderId }
+      : { __type: 'FolderId:#Exchange', Id: folderId };
+
+    const payload = {
+      __type: 'FindItemJsonRequest:#Exchange',
+      Header: {
+        __type: 'JsonRequestHeaders:#Exchange',
+        RequestServerVersion: 'Exchange2013',
+        TimeZoneContext: {
+          __type: 'TimeZoneContext:#Exchange',
+          TimeZoneDefinition: {
+            __type: 'TimeZoneDefinitionType:#Exchange',
+            Id: 'UTC'
+          }
+        }
+      },
+      Body: {
+        __type: 'FindItemRequest:#Exchange',
+        Traversal: 'Shallow',
+        ItemShape: {
+          __type: 'ItemResponseShape:#Exchange',
+          BaseShape: 'IdOnly',
+          AdditionalProperties: [
+            { __type: 'PropertyUri:#Exchange', FieldURI: 'ItemSubject' },
+            { __type: 'PropertyUri:#Exchange', FieldURI: 'ItemDateTimeReceived' },
+            { __type: 'PropertyUri:#Exchange', FieldURI: 'ItemHasAttachments' },
+            { __type: 'PropertyUri:#Exchange', FieldURI: 'MessageFrom' },
+            { __type: 'PropertyUri:#Exchange', FieldURI: 'MessageIsRead' },
+            { __type: 'PropertyUri:#Exchange', FieldURI: 'ItemSize' }
+          ]
+        },
+        ParentFolderIds: [parentFolderBase],
+        IndexedPageItemView: {
+          __type: 'IndexedPageView:#Exchange',
+          BasePoint: 'Beginning',
+          Offset: offset,
+          MaxEntriesReturned: limit
+        }
+      }
+    };
+
+    const res = await mailClient.serviceCall('FindItem', payload);
+    const items = res?.Body?.ResponseMessages?.Items?.[0]?.RootFolder?.Items || [];
+
+    return items.map((item) => {
+      const itemId = item.ItemId?.Id;
+      const fromMailbox = item.From?.Mailbox || {};
+      const senderDisplay = fromMailbox.Name || fromMailbox.EmailAddress || 'Неизвестный отправитель';
+
+      return {
+        id: itemId,
+        itemId: itemId,
+        subject: item.Subject || '(Без темы)',
+        sender: senderDisplay,
+        senders: [senderDisplay],
+        deliveryTime: item.DateTimeReceived,
+        hasAttachments: Boolean(item.HasAttachments),
+        unreadCount: item.IsRead ? 0 : 1,
+        isRead: Boolean(item.IsRead),
+        messageCount: 1,
+        size: item.Size || 0
+      };
+    });
+  },
+
+  /**
+   * Get messages / conversations with resilient automatic fallback
+   */
+  async getConversations({ folderId = 'inbox', offset = 0, limit = 25 } = {}) {
+    try {
+      const convs = await this.getConversationsByFindConversation({ folderId, offset, limit });
+      if (Array.isArray(convs) && convs.length > 0) {
+        return convs;
+      }
+    } catch (err) {
+      console.warn('[MailService] FindConversation failed, trying FindItem fallback:', err.message);
+    }
+
+    return this.getItemsByFindItem({ folderId, offset, limit });
   },
 
   /**

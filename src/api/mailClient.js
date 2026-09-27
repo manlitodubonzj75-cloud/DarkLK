@@ -2,9 +2,9 @@
  * DarkMSAL - Universal Mail HTTP Transport (OWA / Exchange 2016)
  *
  * Supports:
- * - Tampermonkey / Violentmonkey Userscripts (via GM_xmlhttpRequest / GM.xmlHttpRequest)
- * - Electron Desktop (via direct fetch with relaxed CORS)
- * - Capacitor iOS / Android (via native fetch / capacitor)
+ * - Electron Desktop (via native IPC fetch, zero CORS/cookie restrictions)
+ * - Capacitor iOS / Android (via CapacitorHttp plugin, zero CORS/cookie restrictions)
+ * - Userscripts (via GM_xmlhttpRequest / GM.xmlHttpRequest)
  * - Local Vite Development (via '/owa-proxy' in vite.config.js)
  */
 
@@ -74,7 +74,7 @@ class MailClient {
     if (!rawSetCookie) return;
     const cookieHeaders = Array.isArray(rawSetCookie) ? rawSetCookie : [rawSetCookie];
     for (const line of cookieHeaders) {
-      // Split on newline or comma if bundled
+      if (!line || typeof line !== 'string') continue;
       const parts = line.split(/,(?=[^;]+=[^;]+)/g);
       for (const item of parts) {
         const first = item.split(';')[0].trim();
@@ -90,6 +90,9 @@ class MailClient {
           }
         }
       }
+    }
+    if (!this.canary && this.sessionCookies['X-OWA-CANARY']) {
+      this.canary = this.sessionCookies['X-OWA-CANARY'];
     }
     this.saveSession();
   }
@@ -108,7 +111,78 @@ class MailClient {
   async rawRequest({ url, method = 'GET', headers = {}, body = null, followRedirects = true }) {
     const fullUrl = url.startsWith('http') ? url : `${getBaseUrl()}${url}`;
 
-    // 1. Userscript GM_xmlhttpRequest mode (bypass SOP & CORS)
+    // 1. Electron IPC mode (Direct Node.js fetch, bypasses browser CORS & Cookie sandboxing)
+    if (isElectron && typeof window.electronAPI?.mailRequest === 'function') {
+      const cookieHeader = this.getCookieHeader();
+      const reqHeaders = { ...headers };
+      if (cookieHeader) {
+        reqHeaders['Cookie'] = cookieHeader;
+      }
+
+      const resp = await window.electronAPI.mailRequest({
+        url: fullUrl,
+        method,
+        headers: reqHeaders,
+        body,
+        redirect: followRedirects ? 'follow' : 'manual'
+      });
+
+      if (!resp.success) {
+        throw new Error(resp.error || 'Electron mail request failed');
+      }
+
+      if (resp.setCookie) {
+        this.parseAndStoreCookies(resp.setCookie);
+      }
+
+      return {
+        status: resp.status,
+        statusText: resp.statusText,
+        ok: resp.ok,
+        headers: {
+          get: (h) => resp.headers?.[h.toLowerCase()] || null
+        },
+        text: async () => resp.text,
+        json: async () => JSON.parse(resp.text)
+      };
+    }
+
+    // 2. Capacitor Mobile Native mode (CapacitorHttp plugin bypasses WebView CORS & cookies)
+    if (isCapacitor && window.Capacitor?.Plugins?.CapacitorHttp) {
+      const capHttp = window.Capacitor.Plugins.CapacitorHttp;
+      const cookieHeader = this.getCookieHeader();
+      const reqHeaders = { ...headers };
+      if (cookieHeader) {
+        reqHeaders['Cookie'] = cookieHeader;
+      }
+
+      const res = await capHttp.request({
+        url: fullUrl,
+        method,
+        headers: reqHeaders,
+        data: body,
+        responseType: 'text',
+        webFetchFallback: false
+      });
+
+      const setCookie = res.headers?.['set-cookie'] || res.headers?.['Set-Cookie'];
+      if (setCookie) {
+        this.parseAndStoreCookies(setCookie);
+      }
+
+      return {
+        status: res.status,
+        statusText: String(res.status),
+        ok: res.status >= 200 && res.status < 300,
+        headers: {
+          get: (h) => res.headers?.[h.toLowerCase()] || res.headers?.[h] || null
+        },
+        text: async () => typeof res.data === 'string' ? res.data : JSON.stringify(res.data),
+        json: async () => typeof res.data === 'object' ? res.data : JSON.parse(res.data)
+      };
+    }
+
+    // 3. Userscript GM_xmlhttpRequest mode (bypass SOP & CORS)
     if (isUserscript) {
       return new Promise((resolve, reject) => {
         const gmReq = typeof GM_xmlhttpRequest !== 'undefined'
@@ -158,11 +232,11 @@ class MailClient {
       });
     }
 
-    // 2. Standard Fetch mode (Electron, Capacitor, Vite Proxy)
+    // 4. Standard Fetch fallback (Vite dev proxy or CORS-relaxed browser environment)
     const fetchHeaders = new Headers(headers);
     const cookieHeader = this.getCookieHeader();
     if (cookieHeader && !fetchHeaders.has('Cookie')) {
-      fetchHeaders.set('Cookie', cookieHeader);
+      try { fetchHeaders.set('Cookie', cookieHeader); } catch (_) {}
     }
 
     const res = await fetch(fullUrl, {
@@ -185,7 +259,7 @@ class MailClient {
   /**
    * Perform OWA Form Login (POST /owa/auth.owa)
    */
-  async login(username, password) {
+  async login(username, password, isRetry = false) {
     if (!username || !password) {
       throw new Error('Логин и пароль обязательны для входа в почту');
     }
@@ -213,6 +287,12 @@ class MailClient {
 
     const location = res.headers.get('location') || '';
     if (location.includes('reason=2')) {
+      // Credentials rejected. If username didn't contain @msal.ru, try with domain
+      if (!isRetry && !cleanUsername.includes('@')) {
+        return this.login(`${cleanUsername}@msal.ru`, password, true);
+      } else if (!isRetry && cleanUsername.endsWith('@msal.ru')) {
+        return this.login(cleanUsername.replace(/@msal\.ru$/i, ''), password, true);
+      }
       throw new Error('Неверный логин или пароль от почты (Exchange reason=2)');
     } else if (location.includes('reason=')) {
       throw new Error(`Ошибка авторизации на сервере почты: ${location}`);
@@ -240,6 +320,10 @@ class MailClient {
       }
     }
 
+    if (!this.canary && this.sessionCookies['X-OWA-CANARY']) {
+      this.canary = this.sessionCookies['X-OWA-CANARY'];
+    }
+
     this.saveSession();
 
     // Store credentials securely in local AES-GCM vault for silent session refresh
@@ -257,11 +341,23 @@ class MailClient {
   }
 
   /**
-   * Get stored credentials from secure cryptoStorage
+   * Get stored credentials with automatic fallback to LK credentials
    */
   async getStoredCredentials() {
     try {
-      return await cryptoStorage.getItem(OWA_CREDS_STORAGE_KEY);
+      const creds = await cryptoStorage.getItem(OWA_CREDS_STORAGE_KEY);
+      if (creds?.username && creds?.password) {
+        return creds;
+      }
+      // Fallback to LK credentials
+      const lkCreds = cryptoStorage.getSavedCredentials();
+      const lkUser = cryptoStorage.getUser();
+      const login = lkCreds?.login || lkUser?.login || lkUser?.email;
+      const password = lkCreds?.password;
+      if (login && password) {
+        return { username: login, password };
+      }
+      return null;
     } catch (_) {
       return null;
     }
@@ -298,7 +394,6 @@ class MailClient {
    */
   async serviceCall(action, payload, retryOn440 = true) {
     if (!this.canary) {
-      // Check if we can recover session
       await this.reauthenticate();
     }
 
