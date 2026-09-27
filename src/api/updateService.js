@@ -11,7 +11,9 @@
  */
 import { CapacitorHttp } from '@capacitor/core';
 
-export const APP_VERSION = '1.1.0';
+// Подставляется из package.json при сборке (vite define)
+/* global __APP_VERSION__ */
+export const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0';
 const GITHUB_REPO = 'manlitodubonzj75-cloud/DarkLK';
 const API_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
 const MANIFEST_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/latest.json`;

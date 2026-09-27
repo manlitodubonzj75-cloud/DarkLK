@@ -1,5 +1,9 @@
 import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+import react from '@vitejs/plugin-react'
+import { readFileSync } from 'fs'
+
+// Единственный источник версии — package.json
+const APP_VERSION = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version;
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -10,6 +14,7 @@ export default defineConfig({
   plugins: [react()],
   define: {
     'process.env.NODE_ENV': JSON.stringify('production'),
+    __APP_VERSION__: JSON.stringify(APP_VERSION),
   },
   build: {
     outDir: 'dist-userscript',
