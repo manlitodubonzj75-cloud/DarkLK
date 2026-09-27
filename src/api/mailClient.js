@@ -7,31 +7,43 @@ import { cryptoStorage } from './cryptoStorage';
 
 const isElectron = typeof window !== "undefined" && Boolean(window.electronAPI?.isElectron);
 const isCapacitor = typeof window !== "undefined" && Boolean(window.Capacitor?.isNativePlatform?.());
-const isUserscript = typeof GM_xmlhttpRequest !== "undefined" || (typeof GM !== "undefined" && Boolean(GM?.xmlHttpRequest));
+
+function isUserscriptEnv() {
+  if (typeof GM_xmlhttpRequest !== "undefined") return true;
+  if (typeof window !== "undefined" && typeof window.GM_xmlhttpRequest !== "undefined") return true;
+  if (typeof GM !== "undefined" && Boolean(GM?.xmlHttpRequest)) return true;
+  if (typeof window !== "undefined" && typeof window.GM !== "undefined" && Boolean(window.GM?.xmlHttpRequest)) return true;
+  return false;
+}
 
 const getBaseUrl = () => {
-  if (isElectron || isCapacitor || isUserscript) {
+  if (isElectron || isCapacitor || isUserscriptEnv()) {
     return 'https://mail.msal.ru';
   }
   // Local web dev proxy in vite.config.js
   return '/owa-proxy';
 };
 
-
 function gmRequest(options) {
   return new Promise((resolve, reject) => {
-    const fn = (typeof GM_xmlhttpRequest !== "undefined")
-      ? GM_xmlhttpRequest
-      : (typeof GM !== "undefined" && GM?.xmlHttpRequest)
-        ? GM.xmlHttpRequest.bind(GM)
-        : null;
+    let fn = null;
+    if (typeof GM_xmlhttpRequest !== "undefined") {
+      fn = GM_xmlhttpRequest;
+    } else if (typeof window !== "undefined" && typeof window.GM_xmlhttpRequest !== "undefined") {
+      fn = window.GM_xmlhttpRequest;
+    } else if (typeof GM !== "undefined" && GM?.xmlHttpRequest) {
+      fn = GM.xmlHttpRequest.bind(GM);
+    } else if (typeof window !== "undefined" && window.GM?.xmlHttpRequest) {
+      fn = window.GM.xmlHttpRequest.bind(window.GM);
+    }
 
     if (!fn) {
       return reject(new Error("Userscript GM_xmlhttpRequest is not available"));
     }
 
     fn({
-      timeout: options.timeout || 30000,
+      timeout: options.timeout || 35000,
+      anonymous: false,
       ...options,
       onload: (res) => resolve(res),
       onerror: (err) => reject(new Error(err?.error || err?.statusText || "GM_xmlhttpRequest failed")),
@@ -75,6 +87,7 @@ class MailClient {
   constructor() {
     this.sessionCookies = {};
     this.canary = null;
+    this.currentUser = null;
     this.isAuthenticating = false;
     this.loadCachedSession();
   }
@@ -163,7 +176,7 @@ class MailClient {
     }
 
     // 2.5 Userscript mode: direct GET with Blob response via GM_xmlhttpRequest
-    if (isUserscript) {
+    if (isUserscriptEnv()) {
       try {
         const gmRes = await gmRequest({
           method: "GET",
@@ -261,6 +274,9 @@ class MailClient {
       if (this.canary) {
         localStorage.setItem("msal_mail_canary", this.canary);
       }
+      if (this.currentUser) {
+        localStorage.setItem("msal_mail_currentUser", this.currentUser);
+      }
     } catch (_) {}
   }
 
@@ -274,15 +290,21 @@ class MailClient {
       if (savedCanary) {
         this.canary = savedCanary;
       }
+      const savedUser = localStorage.getItem("msal_mail_currentUser");
+      if (savedUser) {
+        this.currentUser = savedUser;
+      }
     } catch (_) {}
   }
 
   clearSession() {
     this.sessionCookies = {};
     this.canary = null;
+    this.currentUser = null;
     try {
       localStorage.removeItem("msal_mail_cookies");
       localStorage.removeItem("msal_mail_canary");
+      localStorage.removeItem("msal_mail_currentUser");
     } catch (_) {}
   }
 
@@ -290,7 +312,7 @@ class MailClient {
     if (!cookieArrayOrStr) return;
     const cookies = Array.isArray(cookieArrayOrStr)
       ? cookieArrayOrStr
-      : cookieArrayOrStr.split(/,(?=\s*[a-zA-Z0-9_\-]+=)/);
+      : cookieArrayOrStr.split(/,s*(?=[a-zA-Z0-9_-]+=)/);
 
     for (const c of cookies) {
       const parts = c.split(';')[0].trim().split('=');
@@ -299,9 +321,6 @@ class MailClient {
         const value = parts.slice(1).join('=').trim();
         if (value && value !== 'deleted') {
           this.sessionCookies[name] = value;
-          if (name.toUpperCase() === 'X-OWA-CANARY') {
-            this.canary = value;
-          }
         }
       }
     }
@@ -310,11 +329,10 @@ class MailClient {
 
   _extractCanaryFromHtml(html) {
     if (!html || typeof html !== 'string') return;
-    const match = html.match(/var\s+g_canary\s*=\s*["']([^"']+)["']/i) ||
-                  html.match(/"UserCanary"\s*:\s*["']([^"']+)["']/i) ||
-                  html.match(/"canary"\s*:\s*["']([^"']+)["']/i) ||
-                  html.match(/name="X-OWA-CANARY"\s+value="([^"]+)"/i) ||
-                  html.match(/&canary=([^&"'>\s]+)/i);
+    const match = html.match(/name="X-OWA-CANARY"\s+value="([^"]+)"/i) ||
+                  html.match(/window\.canary\s*=\s*["']([^"']+)["']/i) ||
+                  html.match(/"UserContext":\{"Canary":"([^"]+)"\}/i) ||
+                  html.match(/var\s+g_canary\s*=\s*["']([^"']+)["']/i);
     if (match && match[1]) {
       this.canary = match[1];
       this.sessionCookies['X-OWA-CANARY'] = this.canary;
@@ -386,7 +404,7 @@ class MailClient {
     }
 
     // 2.5 Userscript mode: GM_xmlhttpRequest
-    if (isUserscript) {
+    if (isUserscriptEnv()) {
       const gmRes = await gmRequest({
         method,
         url: fullUrl,
@@ -452,16 +470,16 @@ class MailClient {
       data = await res.text().catch(() => '');
     }
 
-    const headersObj = {};
-    for (const [k, v] of res.headers.entries()) {
-      headersObj[k.toLowerCase()] = v;
-    }
+    const resHeaders = {};
+    res.headers.forEach((val, key) => {
+      resHeaders[key] = val;
+    });
 
     return {
       status: res.status,
       statusText: res.statusText,
       ok: res.ok,
-      headers: headersObj,
+      headers: resHeaders,
       data
     };
   }
@@ -518,39 +536,16 @@ class MailClient {
     if (this.canary) {
       this.sessionCookies['X-OWA-CANARY'] = this.canary;
     }
-    this.saveSession();
-
-    // Verify session with a lightweight GetFolder test call
-    try {
-      const verifyRes = await this.serviceCall('GetFolder', {
-        __type: 'GetFolderJsonRequest:#Exchange',
-        Header: {
-          __type: 'JsonRequestHeaders:#Exchange',
-          RequestServerVersion: 'Exchange2013'
-        },
-        Body: {
-          __type: 'GetFolderRequest:#Exchange',
-          FolderShape: { __type: 'FolderResponseShape:#Exchange', BaseShape: 'IdOnly' },
-          FolderIds: [{ __type: 'DistinguishedFolderId:#Exchange', Id: 'inbox' }]
-        }
-      });
-      if (verifyRes?.Body?.ResponseMessages?.Items?.[0]?.ResponseClass === 'Success' || verifyRes?.Body) {
-        return true;
-      }
-    } catch (vErr) {
-      if (!this.canary && Object.keys(this.sessionCookies).length === 0) {
-        throw new Error('Не удалось получить сессию Exchange OWA');
-      }
-    }
 
     return true;
   }
 
   async login(username, password) {
-    if (!username || !password) throw new Error('Логин и пароль обязательны');
-    this.clearSession();
+    const rawUser = (username || '').trim();
+    if (!rawUser || !password) {
+      throw new Error('Не указаны логин или пароль');
+    }
 
-    const rawUser = username.trim();
     const candidates = [rawUser];
     if (rawUser.includes('@')) {
       candidates.push(rawUser.split('@')[0]);
@@ -581,6 +576,8 @@ class MailClient {
       throw lastError || new Error('Не удалось войти в почту МГЮА');
     }
 
+    this.currentUser = authenticatedUser;
+    this.saveSession();
     cryptoStorage.setMailCredentials(authenticatedUser, password);
     return true;
   }
@@ -674,7 +671,7 @@ class MailClient {
       };
     }
     // 2.5 Userscript mode: use GM_xmlhttpRequest
-    else if (isUserscript) {
+    else if (isUserscriptEnv()) {
       const gmRes = await gmRequest({
         method: "POST",
         url: fullUrl,
