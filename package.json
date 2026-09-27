@@ -1,6 +1,6 @@
 {
   "name": "darkmsal",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "DarkMSAL - для Альма Матер с любовью. Клиентское приложение для студентов МГЮА",
   "type": "module",
   "main": "electron/main.cjs",

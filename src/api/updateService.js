@@ -5,8 +5,8 @@
  * and handles downloading/installing updates on user devices.
  */
 
-export const APP_VERSION = '1.0';
-const GITHUB_REPO = 'Dewerro67/MSALKA';
+export const APP_VERSION = '1.0.1';
+const GITHUB_REPO = 'manlitodubonzj75-cloud/DarkLK';
 const API_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
 const LAST_CHECK_KEY = 'msal_last_update_check';
 const DISMISSED_VERSION_KEY = 'msal_dismissed_update_version';
