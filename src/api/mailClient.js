@@ -8,11 +8,13 @@ import { cryptoStorage } from './cryptoStorage';
 const isElectron = typeof window !== "undefined" && Boolean(window.electronAPI?.isElectron);
 const isCapacitor = typeof window !== "undefined" && Boolean(window.Capacitor?.isNativePlatform?.());
 
+// GM_* берём только из области видимости userscript-песочницы. window.GM_* не проверяем:
+// страница lk.msal.ru могла бы подложить туда свою функцию и перехватить пароль.
 function isUserscriptEnv() {
+  /* eslint-disable no-undef */
   if (typeof GM_xmlhttpRequest !== "undefined") return true;
-  if (typeof window !== "undefined" && typeof window.GM_xmlhttpRequest !== "undefined") return true;
   if (typeof GM !== "undefined" && Boolean(GM?.xmlHttpRequest)) return true;
-  if (typeof window !== "undefined" && typeof window.GM !== "undefined" && Boolean(window.GM?.xmlHttpRequest)) return true;
+  /* eslint-enable no-undef */
   return false;
 }
 
@@ -27,15 +29,13 @@ const getBaseUrl = () => {
 function gmRequest(options) {
   return new Promise((resolve, reject) => {
     let fn = null;
+    /* eslint-disable no-undef */
     if (typeof GM_xmlhttpRequest !== "undefined") {
       fn = GM_xmlhttpRequest;
-    } else if (typeof window !== "undefined" && typeof window.GM_xmlhttpRequest !== "undefined") {
-      fn = window.GM_xmlhttpRequest;
     } else if (typeof GM !== "undefined" && GM?.xmlHttpRequest) {
       fn = GM.xmlHttpRequest.bind(GM);
-    } else if (typeof window !== "undefined" && window.GM?.xmlHttpRequest) {
-      fn = window.GM.xmlHttpRequest.bind(window.GM);
     }
+    /* eslint-enable no-undef */
 
     if (!fn) {
       return reject(new Error("Userscript GM_xmlhttpRequest is not available"));
@@ -89,10 +89,20 @@ class MailClient {
     this.canary = null;
     this.currentUser = null;
     this.isAuthenticating = false;
-    this.loadCachedSession();
+    this._sessionLoaded = false;
+  }
+
+  // Сессия хранится в зашифрованном cryptoStorage, который готов только после init()
+  // (main.jsx / userscript-entry ждут init до рендера), поэтому грузим лениво.
+  _ensureSessionLoaded() {
+    if (!this._sessionLoaded) {
+      this._sessionLoaded = true;
+      this.loadCachedSession();
+    }
   }
 
   isAuthenticated() {
+    this._ensureSessionLoaded();
     const creds = cryptoStorage.getMailCredentials();
     const hasCreds = Boolean((creds?.username || creds?.login) && creds?.password);
     const hasSession = Boolean(this.canary || this.sessionCookies['UserContext'] || this.sessionCookies['usercontext']);
@@ -126,6 +136,7 @@ class MailClient {
    * Download attachment file across Electron, Android Capacitor, iOS, Userscripts, and Web
    */
   async downloadAttachmentFile(attachmentId, fileName = "attachment", contentType = "application/octet-stream") {
+    this._ensureSessionLoaded();
     if (!this.canary) {
       await this.reauthenticate();
     }
@@ -142,6 +153,9 @@ class MailClient {
         fileName,
         headers: reqHeaders
       });
+      if (resp.canceled) {
+        return { success: false, canceled: true };
+      }
       if (!resp.success) {
         throw new Error(resp.error || "Ошибка скачивания файла в Electron");
       }
@@ -269,50 +283,44 @@ class MailClient {
   }
 
   saveSession() {
-    try {
-      localStorage.setItem("msal_mail_cookies", JSON.stringify(this.sessionCookies));
-      if (this.canary) {
-        localStorage.setItem("msal_mail_canary", this.canary);
-      }
-      if (this.currentUser) {
-        localStorage.setItem("msal_mail_currentUser", this.currentUser);
-      }
-    } catch (_) {}
+    cryptoStorage.setItemFast('msal_mail_session', {
+      cookies: this.sessionCookies,
+      canary: this.canary || null,
+      currentUser: this.currentUser || null
+    });
   }
 
   loadCachedSession() {
-    try {
-      const saved = localStorage.getItem("msal_mail_cookies");
-      if (saved) {
-        this.sessionCookies = JSON.parse(saved);
-      }
-      const savedCanary = localStorage.getItem("msal_mail_canary");
-      if (savedCanary) {
-        this.canary = savedCanary;
-      }
-      const savedUser = localStorage.getItem("msal_mail_currentUser");
-      if (savedUser) {
-        this.currentUser = savedUser;
-      }
-    } catch (_) {}
+    const saved = cryptoStorage.getItemSync('msal_mail_session');
+    if (saved) {
+      this.sessionCookies = { ...(saved.cookies || {}), ...this.sessionCookies };
+      if (!this.canary && saved.canary) this.canary = saved.canary;
+      if (!this.currentUser && saved.currentUser) this.currentUser = saved.currentUser;
+    }
+  }
+
+  hasStoredSession() {
+    this._ensureSessionLoaded();
+    return Boolean(this.canary || Object.keys(this.sessionCookies).length);
+  }
+
+  getCurrentUser() {
+    this._ensureSessionLoaded();
+    return this.currentUser;
   }
 
   clearSession() {
     this.sessionCookies = {};
     this.canary = null;
     this.currentUser = null;
-    try {
-      localStorage.removeItem("msal_mail_cookies");
-      localStorage.removeItem("msal_mail_canary");
-      localStorage.removeItem("msal_mail_currentUser");
-    } catch (_) {}
+    cryptoStorage.removeItem('msal_mail_session');
   }
 
   parseAndStoreCookies(cookieArrayOrStr) {
     if (!cookieArrayOrStr) return;
     const cookies = Array.isArray(cookieArrayOrStr)
       ? cookieArrayOrStr
-      : cookieArrayOrStr.split(/,s*(?=[a-zA-Z0-9_-]+=)/);
+      : cookieArrayOrStr.split(/,\s*(?=[a-zA-Z0-9_-]+=)/);
 
     for (const c of cookies) {
       const parts = c.split(';')[0].trim().split('=');
@@ -341,6 +349,7 @@ class MailClient {
   }
 
   getCookieHeader() {
+    this._ensureSessionLoaded();
     return Object.entries(this.sessionCookies)
       .map(([k, v]) => `${k}=${v}`)
       .join('; ');
@@ -607,6 +616,7 @@ class MailClient {
   }
 
   async serviceCall(action, payload, retryCount = 0) {
+    this._ensureSessionLoaded();
     const fullUrl = `${getBaseUrl()}/owa/service.svc?action=${action}`;
     const cookieHeader = this.getCookieHeader();
 

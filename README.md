@@ -9,7 +9,7 @@
 ## ⚡ Ключевые возможности
 
 - 🔒 **Zero-Proxy & Прямое TLS-соединение**: приложение работает напрямую с официальным сервером `lk.msal.ru:3443`. Никаких промежуточных прокси, сторонних бекендов и сбора телеметрии.
-- 🛡️ **Локальное шифрование AES-GCM-256**: сессионные токены и учётные данные хранятся на устройстве в зашифрованном виде через аппаратный Web Crypto API. Полное соответствие 152-ФЗ РФ.
+- 🛡️ **Локальное шифрование AES-GCM-256**: токены, учётные данные, сессия почты и кэш хранятся на устройстве зашифрованными. Ключ лежит отдельно — в Android Keystore / iOS Keychain / хранилище ключей ОС (Electron safeStorage) / хранилище менеджера скриптов (Userscript). Нет защищённого хранилища — чувствительные данные на диск не пишутся.
 - ⚡ **Мгновенный холодный старт (0 мс)**: расписание на текущий день отображается сразу из локального кэша при входе, после чего фоново синхронизируется с сервером.
 - 📅 **Расписание занятий**: удобный просмотр по дням, неделям и месяцам, подсветка текущей пары, быстрый возврат к сегодняшнему дню, аудитории и ФИО преподавателей.
 - 🎓 **Электронная зачётная книжка**:
@@ -32,8 +32,8 @@
 1. Установите бесплатное расширение **[Userscripts в App Store](https://apps.apple.com/app/userscripts/id1463298887)** (или **Stay**).
 2. Откройте **Настройки ➔ Safari ➔ Расширения ➔ Userscripts** и включите его. Выдайте разрешение «Всегда разрешать» для `lk.msal.ru`.
 3. Откройте в Safari прямую ссылку на скрипт:
-   👉 **[Установить DarkMSAL Userscript](https://raw.githubusercontent.com/manlitodubonzj75-cloud/DarkLK/main/release/darkmsal.user.js)**  
-   *(Резервное зеркало: `https://cdn.jsdelivr.net/gh/manlitodubonzj75-cloud/DarkLK@main/release/darkmsal.user.js`)*
+   👉 **[Установить DarkMSAL Userscript](https://github.com/manlitodubonzj75-cloud/DarkLK/releases/latest/download/darkmsal.user.js)**  
+   *(Скрипт обновляется только из опубликованных релизов, а не из каждого коммита.)*
 4. В появившемся окне расширения нажмите **Install** (Установить).
 5. Перейдите на [https://lk.msal.ru/](https://lk.msal.ru/) — сайт откроется в тёмном интерфейсе DarkMSAL!
 6. **Ярлык на экран «Домой»**: В приложении «Быстрые команды» (Shortcuts) создайте команду: *Открыть URL `https://lk.msal.ru/`* ➔ *Добавить на экран «Домой»*.
@@ -48,13 +48,13 @@
 ---
 
 ### 🤖 3. Android (.apk — нативное приложение, рекомендуется)
-1. Скачайте файл **`DarkMSAL-1.0.apk`** из папки `release/` (или из GitHub Releases).
+1. Скачайте APK **только из [GitHub Releases](https://github.com/manlitodubonzj75-cloud/DarkLK/releases/latest)** и сверьте SHA-256 с файлом `SHA256SUMS.txt` из того же релиза.
 2. Откройте файл на смартфоне и подтвердите установку.
-3. Готово! Приложение работает полностью автономно с поддержкой аппаратного шифрования.
+3. Готово! Ключ шифрования хранится в Android Keystore.
 
 #### Альтернатива на Android (через браузер):
 - В браузере **Firefox**, **Kiwi** или **Yandex Browser** установите расширение **Tampermonkey**.
-- В настройках Tampermonkey ➔ **Утилиты** ➔ вставьте ссылку на скрипт (`https://raw.githubusercontent.com/manlitodubonzj75-cloud/DarkLK/main/release/darkmsal.user.js`) и нажмите «Установить».
+- В настройках Tampermonkey ➔ **Утилиты** ➔ вставьте ссылку на скрипт (`https://github.com/manlitodubonzj75-cloud/DarkLK/releases/latest/download/darkmsal.user.js`) и нажмите «Установить».
 - Либо используйте легковесный браузер **Via Browser** (Настройки ➔ Скрипты ➔ Добавить по URL).
 
 ---
@@ -122,9 +122,23 @@ npm install
 | **Linux Fedora** (RPM x64) | `npm run package:fedora` | `release/darkmsal-1.0.0.x86_64.rpm` |
 | **Linux All** (AppImage + RPM + DEB) | `npm run package:linux` | `release/*.AppImage`, `*.rpm`, `*.deb` |
 | **macOS** (DMG) | `npm run package:mac` | `release/DarkMSAL-1.0.0-arm64.dmg` |
-| **Android** (APK) | `npm run package:apk` | `release/DarkMSAL-1.0.apk` |
+| **Android** (APK, нужен release-ключ, см. ниже) | `npm run package:apk` | `release/DarkMSAL-<версия>.apk` |
 | **iOS** (IPA) | `npm run package:ipa` | `release/DarkMSAL-1.0.ipa` |
 | **Web SPA** | `npm run build` | каталог `dist/` |
+
+### 🔑 Подпись Android
+
+Релизный APK подписывается одним постоянным ключом — иначе обновления не встают поверх, а пользователи привыкают ставить APK откуда попало. Ключ **никогда не коммитится**.
+
+```bash
+# один раз, хранить в надёжном месте (потеря ключа = невозможность выпускать обновления)
+keytool -genkeypair -v -keystore darkmsal-release.keystore -alias darkmsal \
+  -keyalg RSA -keysize 4096 -validity 10000
+base64 -w0 darkmsal-release.keystore   # -> секрет ANDROID_KEYSTORE_BASE64
+```
+
+GitHub → Settings → Secrets and variables → Actions: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`.
+Локально — те же значения через переменные `DARKMSAL_KEYSTORE_FILE`, `DARKMSAL_KEYSTORE_PASSWORD`, `DARKMSAL_KEY_ALIAS`, `DARKMSAL_KEY_PASSWORD`.
 
 ---
 
@@ -154,7 +168,7 @@ DarkLK/
 
 ## ⚖️ Правовая информация и безопасность
 
-- **152-ФЗ РФ**: Все персональные данные обрабатываются исключительно на конечном устройстве пользователя в строгом соответствии с Федеральным законом «О персональных данных» от 27.07.2006 № 152-ФЗ.
+- **Персональные данные**: приложение не отправляет данные никуда, кроме серверов университета (`lk.msal.ru`, `mail.msal.ru`) и GitHub (проверка обновлений, без персональных данных). Всё сохранённое локально — зашифровано (см. выше).
 - **Отказ от ответственности**: Приложение разработано сообществом студентов для улучшения пользовательского опыта и не является официальным продуктом Университета имени О.Е. Кутафина (МГЮА).
 - **Служба поддержки**: Официальный бот в Telegram [@DarkMSAL_supportbot](https://t.me/DarkMSAL_supportbot).
 - **Репозиторий проекта**: [https://github.com/manlitodubonzj75-cloud/DarkLK](https://github.com/manlitodubonzj75-cloud/DarkLK).

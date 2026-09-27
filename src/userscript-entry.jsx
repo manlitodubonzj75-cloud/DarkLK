@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 import './index.css';
+import { cryptoStorage } from './api/cryptoStorage.js';
 
 // Mark environment as Userscript
 if (typeof window !== 'undefined') {
@@ -137,11 +138,14 @@ function initDarkMSAL() {
   document.body.appendChild(rootContainer);
   document.body.appendChild(floatingBtn);
 
-  ReactDOM.createRoot(rootContainer).render(
-    <React.StrictMode>
-      <App />
-    </React.StrictMode>
-  );
+  // Ключ шифрования хранится в GM-хранилище менеджера скриптов (страница его не видит).
+  cryptoStorage.init().finally(() => {
+    ReactDOM.createRoot(rootContainer).render(
+      <React.StrictMode>
+        <App />
+      </React.StrictMode>
+    );
+  });
 }
 
 // Ensure execution when DOM is ready

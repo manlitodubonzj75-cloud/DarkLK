@@ -1,6 +1,6 @@
 {
   "name": "darkmsal",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "DarkMSAL - для Альма Матер с любовью. Клиентское приложение для студентов МГЮА",
   "type": "module",
   "main": "electron/main.cjs",
@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "electron:dev": "NODE_ENV=development electron .",
     "package:mac": "vite build && electron-builder --mac dmg",
-    "package:apk": "vite build && npx cap sync android && cd android && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=/opt/homebrew/share/android-commandlinetools ./gradlew assembleDebug && cp app/build/outputs/apk/debug/app-debug.apk ../release/DarkMSAL-1.0.apk",
+    "package:apk": "vite build && npx cap sync android && cd android && ./gradlew assembleRelease && cp app/build/outputs/apk/release/app-release.apk ../release/DarkMSAL-$npm_package_version.apk",
     "package:win": "vite build && electron-builder --win --x64",
     "package:fedora": "vite build && electron-builder --linux rpm --x64",
     "package:linux": "vite build && electron-builder --linux AppImage rpm deb --x64",
@@ -80,6 +80,7 @@
     }
   },
   "dependencies": {
+    "@aparajita/capacitor-secure-storage": "^7.1.6",
     "@capacitor/core": "^7.0.1",
     "@capacitor/ios": "^7.6.9",
     "lucide-react": "^1.45.0",

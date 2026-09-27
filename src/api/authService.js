@@ -70,11 +70,15 @@ export const authService = {
     } catch (e) {
       console.warn('Logout request warning:', e.message);
     } finally {
-      await cryptoStorage.purgeAll();
+      // Сначала гасим сессию почты (ей нужны куки), потом стираем всё вместе с ключом
       try {
         const { mailService } = await import('./mailService.js');
-        await mailService.logout();
+        await Promise.race([
+          mailService.logout(),
+          new Promise((resolve) => setTimeout(resolve, 3000))
+        ]);
       } catch (_) {}
+      await cryptoStorage.purgeAll();
     }
   },
 
@@ -100,7 +104,7 @@ export const authService = {
   async restoreSession() {
     await cryptoStorage.init();
 
-    const token = cryptoStorage.getToken() || localStorage.getItem('access_token') || localStorage.getItem('token');
+    const token = cryptoStorage.getToken();
     const { login: savedLogin, password: savedPassword } = await cryptoStorage.getSavedCredentialsAsync();
     const offlineUser = this.getCachedUser();
 

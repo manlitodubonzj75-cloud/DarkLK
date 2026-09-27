@@ -16,7 +16,7 @@ import { cryptoStorage } from './cryptoStorage';
 const isCapacitorNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
 
 const isUserscriptOrMsalDomain = typeof window !== 'undefined' && (
-  window.location.hostname.includes('msal.ru') ||
+  window.location.hostname === 'msal.ru' || window.location.hostname.endsWith('.msal.ru') ||
   window.location.protocol === 'file:' ||
   window.location.protocol === 'capacitor:' ||
   window.location.protocol === 'ionic:'
@@ -74,7 +74,7 @@ function getStandardHeaders(explicitToken = null) {
     ...getPlatformDeviceHeaders()
   };
 
-  const token = explicitToken || cryptoStorage.getToken() || localStorage.getItem('access_token') || localStorage.getItem('token');
+  const token = explicitToken || cryptoStorage.getToken();
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
@@ -151,11 +151,52 @@ async function nativeCapacitorFetch(url, options = {}, timeoutMs = 15000) {
 }
 
 /**
+ * Electron: запрос идёт через main-процесс (он пускает только на lk.msal.ru:3443),
+ * поэтому в окне можно держать webSecurity включённым.
+ */
+async function electronFetch(url, options = {}, timeoutMs = 15000) {
+  const res = await window.electronAPI.apiRequest({
+    url,
+    method: (options.method || 'GET').toUpperCase(),
+    headers: options.headers || {},
+    body: typeof options.body === 'string' ? options.body : (options.body ? JSON.stringify(options.body) : null),
+    redirect: 'follow',
+    timeout: timeoutMs
+  });
+
+  if (!res || !res.success) {
+    const msg = res?.error || 'Electron network error';
+    const error = new Error(/timeout|aborted/i.test(msg) ? `Request timed out after ${timeoutMs}ms: ${url}` : msg);
+    if (/timeout|aborted/i.test(msg)) {
+      error.name = 'TimeoutError';
+      error.status = 408;
+    } else {
+      error.status = 0;
+    }
+    throw error;
+  }
+
+  const text = res.text || '';
+  return {
+    status: res.status,
+    ok: res.ok,
+    headers: {
+      get: (h) => res.headers?.[String(h).toLowerCase()] ?? null
+    },
+    json: async () => JSON.parse(text),
+    text: async () => text
+  };
+}
+
+/**
  * Universal wrapper around fetch with timeout via AbortController or native mobile client
  */
 async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   if (isCapacitorNative) {
     return nativeCapacitorFetch(url, options, timeoutMs);
+  }
+  if (typeof window !== 'undefined' && typeof window.electronAPI?.apiRequest === 'function') {
+    return electronFetch(url, options, timeoutMs);
   }
 
   const controller = new AbortController();
@@ -195,7 +236,7 @@ export async function tryRefreshToken() {
   refreshPromise = (async () => {
     try {
       // 1. Try /auth/refresh if refresh_token is available
-      const refreshToken = cryptoStorage.getRefreshToken() || localStorage.getItem('refresh_token');
+      const refreshToken = cryptoStorage.getRefreshToken();
       if (refreshToken) {
         try {
           const response = await fetchWithTimeout(`${BASE_URL}/auth/refresh`, {
@@ -290,7 +331,7 @@ export async function apiClient(endpoint, options = {}) {
       if (!endpoint.includes('/auth')) {
         const refreshed = await tryRefreshToken();
         if (refreshed) {
-          const newToken = cryptoStorage.getToken() || localStorage.getItem('access_token') || localStorage.getItem('token');
+          const newToken = cryptoStorage.getToken();
           headers['Authorization'] = `Bearer ${newToken}`;
           const retryResponse = await fetchWithTimeout(url, { ...config, headers }, timeoutMs);
           if (retryResponse.ok) {

@@ -382,7 +382,7 @@ export const SettingsPage = () => {
               <Icons.Shield size={18} className="text-secondary" />
               <div>
                 <h4 className="text-xs sm:text-sm font-semibold text-dark">Политика обработки персональных данных</h4>
-                <p className="text-[11px] text-textMuted">Соответствие 152-ФЗ и локальная безопасность</p>
+                <p className="text-[11px] text-textMuted">Персональные данные и локальная безопасность</p>
               </div>
             </div>
             <Icons.ChevronRight size={16} className="text-textMuted" />

@@ -21,10 +21,10 @@
   "folderSchema": {
     "Header": {
       "ServerVersionInfo": {
-        "MajorVersion": 15,
-        "MinorVersion": 1,
-        "MajorBuildNumber": 2507,
-        "MinorBuildNumber": 6,
+        "MajorVersion": 0,
+        "MinorVersion": 0,
+        "MajorBuildNumber": 0,
+        "MinorBuildNumber": 0,
         "Version": "[REDACTED_STR]"
       }
     },
@@ -39,12 +39,12 @@
               {
                 "__type": "Folder:#Exchange",
                 "FolderId": {
-                  "Id": "AAMkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgAuAAAAAABYdAzzf5NuQKlIU3rh5qRGAQCrgHsR2sLdRqHq9Xbe6x3PAAAAAAEIAAA=",
-                  "ChangeKey": "AQAAABYAAACrgHsR2sLdRqHq9Xbe6x3PAABpfBqc"
+                  "Id": "[REDACTED_STR]",
+                  "ChangeKey": "[REDACTED_STR]"
                 },
                 "ParentFolderId": {
-                  "Id": "AAMkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgAuAAAAAABYdAzzf5NuQKlIU3rh5qRGAQCrgHsR2sLdRqHq9Xbe6x3PAAAAAAEBAAA=",
-                  "ChangeKey": "AQAAAA=="
+                  "Id": "[REDACTED_STR]",
+                  "ChangeKey": "[REDACTED_STR]"
                 },
                 "DisplayName": "[REDACTED_STR]",
                 "TotalCount": 0,
@@ -70,10 +70,10 @@
   "findConvSchema": {
     "Header": {
       "ServerVersionInfo": {
-        "MajorVersion": 15,
-        "MinorVersion": 1,
-        "MajorBuildNumber": 2507,
-        "MinorBuildNumber": 6,
+        "MajorVersion": 0,
+        "MinorVersion": 0,
+        "MajorBuildNumber": 0,
+        "MinorBuildNumber": 0,
         "Version": "[REDACTED_STR]"
       }
     },
@@ -83,7 +83,7 @@
       "Conversations": [
         {
           "ConversationId": {
-            "Id": "AAQkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgAQAA8QS6ZyXMdMgvJdrlmR1T0="
+            "Id": "[REDACTED_STR]"
           },
           "ConversationTopic": "[REDACTED_STR]",
           "UniqueRecipients": [
@@ -125,15 +125,15 @@
           "ItemIds": [
             {
               "__type": "ItemId:#Exchange",
-              "ChangeKey": "CQAAAA==",
-              "Id": "AAMkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgBGAAAAAABYdAzzf5NuQKlIU3rh5qRGBwCrgHsR2sLdRqHq9Xbe6x3PAAAAAAEMAACrgHsR2sLdRqHq9Xbe6x3PAAHodT6oAAA="
+              "ChangeKey": "[REDACTED_STR]",
+              "Id": "[REDACTED_STR]"
             }
           ],
           "GlobalItemIds": [
             {
               "__type": "ItemId:#Exchange",
-              "ChangeKey": "CQAAAA==",
-              "Id": "AAMkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgBGAAAAAABYdAzzf5NuQKlIU3rh5qRGBwCrgHsR2sLdRqHq9Xbe6x3PAAAAAAEMAACrgHsR2sLdRqHq9Xbe6x3PAAHodT6oAAA="
+              "ChangeKey": "[REDACTED_STR]",
+              "Id": "[REDACTED_STR]"
             }
           ],
           "LastModifiedTime": "[REDACTED_STR]",
@@ -143,12 +143,12 @@
           "GlobalHasIrm": false,
           "IsLocked": false,
           "FamilyId": {
-            "Id": "AAQkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgAQAA8QS6ZyXMdMgvJdrlmR1T0="
+            "Id": "[REDACTED_STR]"
           }
         },
         {
           "ConversationId": {
-            "Id": "AAQkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgAQAK09jBWWr6BDtYYj1MLHVA4="
+            "Id": "[REDACTED_STR]"
           },
           "ConversationTopic": "[STRING_LEN_88]",
           "UniqueRecipients": [
@@ -190,15 +190,15 @@
           "ItemIds": [
             {
               "__type": "ItemId:#Exchange",
-              "ChangeKey": "CQAAAA==",
-              "Id": "AAMkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgBGAAAAAABYdAzzf5NuQKlIU3rh5qRGBwCrgHsR2sLdRqHq9Xbe6x3PAAAAAAEMAACrgHsR2sLdRqHq9Xbe6x3PAAHodT6nAAA="
+              "ChangeKey": "[REDACTED_STR]",
+              "Id": "[REDACTED_STR]"
             }
           ],
           "GlobalItemIds": [
             {
               "__type": "ItemId:#Exchange",
-              "ChangeKey": "CQAAAA==",
-              "Id": "AAMkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgBGAAAAAABYdAzzf5NuQKlIU3rh5qRGBwCrgHsR2sLdRqHq9Xbe6x3PAAAAAAEMAACrgHsR2sLdRqHq9Xbe6x3PAAHodT6nAAA="
+              "ChangeKey": "[REDACTED_STR]",
+              "Id": "[REDACTED_STR]"
             }
           ],
           "LastModifiedTime": "[REDACTED_STR]",
@@ -208,7 +208,7 @@
           "GlobalHasIrm": false,
           "IsLocked": false,
           "FamilyId": {
-            "Id": "AAQkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgAQAK09jBWWr6BDtYYj1MLHVA4="
+            "Id": "[REDACTED_STR]"
           }
         }
       ],

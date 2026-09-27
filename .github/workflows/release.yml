@@ -6,8 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# По умолчанию — только чтение; запись нужна лишь джобе публикации релиза
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-desktop:
@@ -102,15 +103,32 @@ jobs:
       - name: Make Gradlew Executable
         run: chmod +x android/gradlew
 
-      - name: Build Android Debug APK
+      - name: Decode release keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::Нет секрета ANDROID_KEYSTORE_BASE64. Релизный APK без постоянного ключа подписи не собираем (см. README → «Подпись Android»)."
+            exit 1
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          echo "DARKMSAL_KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+
+      - name: Build Android Release APK
+        env:
+          DARKMSAL_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          DARKMSAL_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          DARKMSAL_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           cd android
-          ./gradlew assembleDebug
+          ./gradlew assembleRelease
 
       - name: Prepare APK Artifact
         run: |
           mkdir -p release
-          cp android/app/build/outputs/apk/debug/app-debug.apk release/DarkMSAL-2.0.1.apk
+          VERSION=$(node -p "require('./package.json').version")
+          cp android/app/build/outputs/apk/release/app-release.apk "release/DarkMSAL-$VERSION.apk"
+          rm -f "$RUNNER_TEMP/release.keystore"
 
       - name: Upload Android Artifact
         uses: actions/upload-artifact@v4
@@ -145,7 +163,8 @@ jobs:
           xcodebuild archive -workspace ios/App/App.xcworkspace -scheme App -configuration Release -destination 'generic/platform=iOS' -archivePath build/App.xcarchive CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
           mkdir -p release/Payload
           cp -R build/App.xcarchive/Products/Applications/App.app release/Payload/
-          cd release && zip -qr -y DarkMSAL-2.0.1.ipa Payload && rm -rf Payload
+          VERSION=$(node -p "require('./package.json').version")
+          cd release && zip -qr -y "DarkMSAL-$VERSION.ipa" Payload && rm -rf Payload
 
       - name: Upload iOS IPA Artifact
         uses: actions/upload-artifact@v4
@@ -153,10 +172,37 @@ jobs:
           name: ios-ipa
           path: release/*.ipa
 
+  build-userscript:
+    name: Build Userscript
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build userscript
+        run: npm run build:userscript
+
+      - name: Upload userscript
+        uses: actions/upload-artifact@v4
+        with:
+          name: userscript
+          path: release/darkmsal.user.js
+
   publish-release:
     name: Publish GitHub Release
-    needs: [build-desktop, build-android, build-ios]
+    needs: [build-desktop, build-android, build-ios, build-userscript]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -169,15 +215,23 @@ jobs:
       - name: Gather release binaries
         run: |
           mkdir -p final-release
-          find artifacts -type f \( -name "*.apk" -o -name "*.ipa" -o -name "*.rpm" -o -name "*.deb" -o -name "*.AppImage" -o -name "*.dmg" -o -name "*.exe" \) -exec cp {} final-release/ \;
-          ls -lh final-release/
+          find artifacts -type f \( -name "*.apk" -o -name "*.ipa" -o -name "*.rpm" -o -name "*.deb" -o -name "*.AppImage" -o -name "*.dmg" -o -name "*.exe" -o -name "*.user.js" \) -exec cp {} final-release/ \;
+          cd final-release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         with:
-          tag_name: ${{ github.ref_name || 'v2.0.1' }}
-          name: DarkMSAL ${{ github.ref_name || 'v2.0.1' }}
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: DarkMSAL ${{ steps.tag.outputs.tag }}
           draft: false
           prerelease: false
           generate_release_notes: true

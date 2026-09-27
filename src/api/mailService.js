@@ -20,7 +20,7 @@ export const mailService = {
    * so user can browse cached emails without getting logged out / ejected.
    */
   async checkAuth() {
-    const cachedUser = mailClient.currentUser || localStorage.getItem('msal_mail_currentUser');
+    const cachedUser = mailClient.getCurrentUser();
 
     if (mailClient.canary && cachedUser) {
       return { isAuthenticated: true, username: cachedUser };
@@ -47,7 +47,7 @@ export const mailService = {
     }
 
     const hasStoredCreds = Boolean(cryptoStorage.getMailCredentials() || cryptoStorage.getSavedCredentials()?.login);
-    const hasStoredSession = Boolean(mailClient.canary || localStorage.getItem('msal_mail_cookies'));
+    const hasStoredSession = mailClient.hasStoredSession();
 
     return {
       isAuthenticated: hasStoredCreds || hasStoredSession,

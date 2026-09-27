@@ -105,7 +105,8 @@ class CookieJar {
 function anonymize(obj, depth = 0) {
   if (depth > 10) return '[DepthLimit]';
   if (obj === null || obj === undefined) return obj;
-  if (typeof obj === 'number' || typeof obj === 'boolean') return obj;
+  if (typeof obj === 'boolean') return obj;
+  if (typeof obj === 'number') return 0;
   if (typeof obj === 'string') {
     if (obj.includes('@')) return '[EMAIL_REDACTED]';
     if (obj.length > 50) return `[STRING_LEN_${obj.length}]`;
@@ -118,7 +119,8 @@ function anonymize(obj, depth = 0) {
   if (typeof obj === 'object') {
     const res = {};
     for (const [k, v] of Object.entries(obj)) {
-      if (k === '__type' || k === 'Id' || k === 'FolderId' || k === 'ItemId' || k === 'ChangeKey' || k === 'ResponseCode' || k === 'ResponseClass') {
+      // Id/ChangeKey НЕ сохраняем: в них зашит GUID конкретного почтового ящика
+      if (k === '__type' || k === 'ResponseCode' || k === 'ResponseClass') {
         res[k] = v;
       } else {
         res[k] = anonymize(v, depth + 1);
@@ -210,7 +212,7 @@ async function run() {
     fs.writeFileSync(sessionFilePath, JSON.stringify({
       cookies: jar.toObject(),
       canary: canary
-    }, null, 2));
+    }, null, 2), { mode: 0o600 });
   }
 
   console.log(`\x1b[32m✔ CSRF Canary готов: ${canary?.slice(0, 8)}...\x1b[0m`);

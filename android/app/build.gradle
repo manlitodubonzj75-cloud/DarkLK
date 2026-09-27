@@ -7,8 +7,8 @@ android {
         applicationId "ru.msal.plus"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 3
-        versionName "1.0"
+        versionCode 4
+        versionName "1.1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,8 +16,26 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // Релизная подпись берётся из переменных окружения (в CI — из GitHub Secrets).
+    // Ключ НИКОГДА не коммитится в репозиторий. Без него release-сборка не соберётся,
+    // и это намеренно: раздавать людям debug-APK нельзя.
+    def releaseKeystore = System.getenv("DARKMSAL_KEYSTORE_FILE")
+    signingConfigs {
+        release {
+            if (releaseKeystore) {
+                storeFile file(releaseKeystore)
+                storePassword System.getenv("DARKMSAL_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("DARKMSAL_KEY_ALIAS")
+                keyPassword System.getenv("DARKMSAL_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
+            if (releaseKeystore) {
+                signingConfig signingConfigs.release
+            }
+            debuggable false
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

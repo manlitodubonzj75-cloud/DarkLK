@@ -4,11 +4,11 @@
   "webDir": "dist",
   "server": {
     "androidScheme": "https",
-    "hostname": "lk.msal.ru",
-    "cleartext": true
+    "hostname": "lk.msal.ru"
   },
   "android": {
-    "allowMixedContent": true
+    "allowMixedContent": false,
+    "webContentsDebuggingEnabled": false
   },
   "ios": {
     "scheme": "DarkMSAL",

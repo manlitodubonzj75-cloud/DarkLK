@@ -16,9 +16,8 @@ node_modules/
 dist/
 dist-ssr/
 release/*
+# userscript остаётся в main только ради миграции старых установок (их updateURL смотрит сюда)
 !release/darkmsal.user.js
-!release/DarkMSAL-1.0.apk
-!release/DarkMSAL-1.0.ipa
 out/
 
 # Note: The root "build/" folder contains application icon assets (icon.icns, icon.png)
@@ -55,3 +54,11 @@ ios/App/App.xcodeproj/xcuserdata/
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Живые сессии и секреты — никогда не коммитить
+scripts/.owa-session.json
+.owa-session.json
+*.keystore
+*.jks
+.env
+.env.*

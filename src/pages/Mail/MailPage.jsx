@@ -42,6 +42,8 @@ export const MailPage = () => {
   });
   const [selectedConversation, setSelectedConversation] = useState(null);
   const [selectedMessage, setSelectedMessage] = useState(null);
+  // Внешние картинки в письмах по умолчанию не грузим: трекинг-пиксели сливают IP и время прочтения
+  const [showRemoteImages, setShowRemoteImages] = useState(false);
 
   // UI / Loading State
   const [isLoadingList, setIsLoadingList] = useState(false);
@@ -99,6 +101,11 @@ export const MailPage = () => {
     setShowRecipientDropdown(false);
     setRecipientSuggestions([]);
   };
+
+  // Новое письмо — снова прячем внешние картинки
+  useEffect(() => {
+    setShowRemoteImages(false);
+  }, [selectedConversation?.id, selectedConversation?.itemId]);
 
   // Close dropdown on click outside
   useEffect(() => {
@@ -342,7 +349,15 @@ export const MailPage = () => {
   });
 
   // Prepare sandboxed iframe content for email reading
-  const renderSafeIframeDoc = (htmlBody) => {
+  const hasRemoteContent = (htmlBody) =>
+    typeof htmlBody === 'string' &&
+    /(?:src|background|srcset|poster)\s*=\s*["']?\s*(?:https?:)?\/\/|url\(\s*["']?\s*(?:https?:)?\/\//i.test(htmlBody);
+
+  const renderSafeIframeDoc = (htmlBody, allowRemote = false) => {
+    // CSP внутри srcdoc: никаких скриптов, форм, фреймов и внешних запросов.
+    // Картинки с https разрешаются только по кнопке «Показать картинки».
+    const imgSrc = allowRemote ? "data: cid: https:" : "data: cid:";
+    const csp = `default-src 'none'; img-src ${imgSrc}; style-src 'unsafe-inline'; font-src data:; media-src 'none'; form-action 'none'; base-uri 'none'`;
     const isDarkTheme = isDark;
     const textColor = isDarkTheme ? '#E2E8F0' : '#1E293B';
     const bgColor = isDarkTheme ? '#1A1F2B' : '#FFFFFF';
@@ -398,7 +413,10 @@ export const MailPage = () => {
       <html>
         <head>
           <meta charset="utf-8">
+          <meta http-equiv="Content-Security-Policy" content="${csp}">
+          <meta name="referrer" content="no-referrer">
           <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+          <base target="_blank">
           <style>
             html, body {
               margin: 0;
@@ -878,12 +896,30 @@ export const MailPage = () => {
                   <LoadingSpinner size={8} text="Загрузка содержимого письма..." />
                 </div>
               ) : selectedMessage?.body ? (
-                <iframe
-                  title="email-body"
-                  sandbox="allow-popups allow-popups-to-escape-sandbox"
-                  srcDoc={renderSafeIframeDoc(selectedMessage.body)}
-                  className="w-full h-full border-none block"
-                />
+                <div className="flex flex-col h-full">
+                  {!showRemoteImages && hasRemoteContent(selectedMessage.body) && (
+                    <div className="flex items-center justify-between gap-3 px-4 py-2 text-xs bg-amber-50 text-amber-800 dark:bg-amber-900/20 dark:text-amber-300 border-b border-amber-200/60 dark:border-amber-800/40">
+                      <span className="flex items-center gap-2 min-w-0">
+                        <Icons.ImageOff className="w-4 h-4 shrink-0" />
+                        <span className="truncate">Внешние картинки скрыты — отправитель не узнает ваш IP и время прочтения</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowRemoteImages(true)}
+                        className="shrink-0 font-semibold underline underline-offset-2 hover:opacity-80"
+                      >
+                        Показать
+                      </button>
+                    </div>
+                  )}
+                  <iframe
+                    title="email-body"
+                    sandbox="allow-popups allow-popups-to-escape-sandbox"
+                    referrerPolicy="no-referrer"
+                    srcDoc={renderSafeIframeDoc(selectedMessage.body, showRemoteImages)}
+                    className="w-full flex-1 min-h-0 border-none block"
+                  />
+                </div>
               ) : (
                 <div className="p-6 text-sm text-gray-500 whitespace-pre-wrap">
                   {selectedMessage?.body || '(Пустое сообщение)'}

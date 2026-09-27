@@ -38,24 +38,23 @@ const header = `// ==UserScript==
 // @version      ${version}
 // @description  Тёмный современный интерфейс для личного кабинета студента МГЮА (lk.msal.ru)
 // @author       DarkMSAL Team
-// @match        *://lk.msal.ru/*
-// @match        *://*.msal.ru/*
-// @include      *://lk.msal.ru*
-// @include      *://*.msal.ru*
-// @include      https://lk.msal.ru*
-// @include      http://lk.msal.ru*
+// @match        https://lk.msal.ru/*
 // @run-at       document-end
 // @noframes
 // @grant        GM_addStyle
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_deleteValue
+// @grant        GM.setValue
+// @grant        GM.getValue
+// @grant        GM.deleteValue
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
 // @connect      mail.msal.ru
 // @connect      lk.msal.ru
-// @updateURL    https://raw.githubusercontent.com/manlitodubonzj75-cloud/DarkLK/main/release/darkmsal.user.js
-// @downloadURL  https://raw.githubusercontent.com/manlitodubonzj75-cloud/DarkLK/main/release/darkmsal.user.js
+// @updateURL    https://github.com/manlitodubonzj75-cloud/DarkLK/releases/latest/download/darkmsal.user.js
+// @downloadURL  https://github.com/manlitodubonzj75-cloud/DarkLK/releases/latest/download/darkmsal.user.js
 // @icon         https://raw.githubusercontent.com/manlitodubonzj75-cloud/DarkLK/main/public/logo.png
 // ==/UserScript==
 `;

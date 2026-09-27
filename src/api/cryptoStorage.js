@@ -1,284 +1,319 @@
 /**
- * DarkMSAL CryptoStorage (Zero-Retention Security Engine)
- * 
- * Compliant with 152-FZ & Zero-Retention Architecture:
- * - Credentials and tokens are NEVER sent to any third-party or intermediate server.
- * - Sensitive values (access_token, refresh_token, student password) are encrypted at rest using AES-GCM 256.
- * - Cryptographic key is derived per device/browser session using Web Crypto API.
- * - Memory vault caches values in RAM during active app session to eliminate crypto overhead.
+ * DarkMSAL CryptoStorage
+ *
+ * Схема: envelope-шифрование.
+ *  - Значения шифруются AES-GCM-256 случайным ключом данных (DEK).
+ *  - DEK хранится в хранилище платформы (см. keyProvider.js), а НЕ в localStorage
+ *    рядом с шифротекстом.
+ *  - Если безопасного хранилища нет — чувствительные данные живут только в памяти
+ *    и на диск не пишутся (никакого тихого фолбэка на открытый текст).
+ *
+ * Формат значения в localStorage: "v2:" + base64(iv[12] || ciphertext).
  */
+import { getDataKey, destroyDataKey, bytesToB64, b64ToBytes } from './keyProvider.js';
 
-// Memory cache for sub-millisecond synchronous reads during active session
+const PREFIX_V2 = 'v2:';
+const PREFIX_V1 = 'enc_v1:';
+
+// Ключи localStorage, которые считаются чувствительными и хранятся только зашифрованными
+const CREDENTIALS_KEY = 'msal_credentials';
+const SENSITIVE_KEYS = [
+  'access_token',
+  'refresh_token',
+  'cached_user',
+  CREDENTIALS_KEY,
+  'msal_mail_session'
+];
+const SENSITIVE_PREFIXES = ['msal_cache_'];
+
+// Устаревшие ключи (v1), которые надо мигрировать или удалить
+const LEGACY_SALT_KEY = 'msal_crypto_salt_v1';
+const LEGACY_KEYS = [
+  'token',
+  'saved_login',
+  'saved_password',
+  'msal_owa_credentials',
+  'msal_owa_session',
+  'msal_mail_cookies',
+  'msal_mail_canary',
+  'msal_mail_currentUser',
+  'msal_mail_username'
+];
+
+// RAM-кэш расшифрованных значений
 const memoryVault = new Map();
+// Счётчик версий на ключ, чтобы поздняя асинхронная запись не перетёрла свежую
+const writeSeq = new Map();
 
-// Local device salt and master key management
-const SALT_KEY = 'msal_crypto_salt_v1';
-const KEY_NAME = 'msal_aes_key';
+let initPromise = null;
 
-let cachedCryptoKey = null;
+function isSensitiveKey(key) {
+  return SENSITIVE_KEYS.includes(key) || SENSITIVE_PREFIXES.some((p) => key.startsWith(p));
+}
 
-async function getOrDeriveKey() {
-  if (cachedCryptoKey) return cachedCryptoKey;
-
-  if (typeof crypto === 'undefined' || !crypto.subtle) {
-    return null; // Fallback to memory-only or raw if WebCrypto is unavailable
+function lsGet(key) {
+  try { return localStorage.getItem(key); } catch (_) { return null; }
+}
+function lsSet(key, val) {
+  try { localStorage.setItem(key, val); return true; } catch (e) {
+    console.warn(`[CryptoStorage] localStorage write failed for ${key}:`, e?.message);
+    return false;
   }
-
+}
+function lsRemove(key) {
+  try { localStorage.removeItem(key); } catch (_) {}
+}
+function lsKeys() {
+  const out = [];
   try {
-    let salt = localStorage.getItem(SALT_KEY);
-    if (!salt) {
-      const saltBuffer = new Uint8Array(16);
-      crypto.getRandomValues(saltBuffer);
-      salt = Array.from(saltBuffer).map(b => b.toString(16).padStart(2, '0')).join('');
-      localStorage.setItem(SALT_KEY, salt);
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k) out.push(k);
     }
+  } catch (_) {}
+  return out;
+}
 
-    const enc = new TextEncoder();
-    const keyMaterial = await crypto.subtle.importKey(
+async function encryptValue(key, data) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plain = new TextEncoder().encode(JSON.stringify(data));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plain));
+  const packed = new Uint8Array(iv.length + ct.length);
+  packed.set(iv, 0);
+  packed.set(ct, iv.length);
+  return PREFIX_V2 + bytesToB64(packed);
+}
+
+async function decryptValue(key, raw) {
+  const packed = b64ToBytes(raw.slice(PREFIX_V2.length));
+  const iv = packed.slice(0, 12);
+  const ct = packed.slice(12);
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+
+/* ---------------- Legacy v1 (ключ из соли в localStorage) ---------------- */
+
+async function legacyV1Key() {
+  const salt = lsGet(LEGACY_SALT_KEY);
+  if (!salt || typeof crypto === 'undefined' || !crypto.subtle) return null;
+  try {
+    const material = await crypto.subtle.importKey(
       'raw',
-      enc.encode(`${salt}_DarkMSAL_Local_Keystore`),
+      new TextEncoder().encode(`${salt}_DarkMSAL_Local_Keystore`),
       { name: 'PBKDF2' },
       false,
       ['deriveKey']
     );
-
-    const saltBytes = new Uint8Array(salt.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-
-    cachedCryptoKey = await crypto.subtle.deriveKey(
-      {
-        name: 'PBKDF2',
-        salt: saltBytes,
-        iterations: 100000,
-        hash: 'SHA-256'
-      },
-      keyMaterial,
+    const saltBytes = new Uint8Array(salt.match(/.{1,2}/g).map((b) => parseInt(b, 16)));
+    return await crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt: saltBytes, iterations: 100000, hash: 'SHA-256' },
+      material,
       { name: 'AES-GCM', length: 256 },
       false,
-      ['encrypt', 'decrypt']
+      ['decrypt']
     );
-
-    return cachedCryptoKey;
-  } catch (err) {
-    console.warn('[CryptoStorage] Key derivation warning:', err);
+  } catch (_) {
     return null;
   }
 }
 
-/**
- * Encrypt a text or object with AES-GCM 256
- */
-async function encryptValue(data) {
-  const key = await getOrDeriveKey();
-  if (!key || typeof crypto === 'undefined' || !crypto.subtle) {
-    return typeof data === 'string' ? data : JSON.stringify(data);
+async function readLegacy(v1Key, raw) {
+  if (raw == null) return null;
+  if (raw.startsWith(PREFIX_V1)) {
+    if (!v1Key) return null;
+    try {
+      const { iv, ct } = JSON.parse(raw.slice(PREFIX_V1.length));
+      const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: new Uint8Array(iv) }, v1Key, new Uint8Array(ct));
+      const text = new TextDecoder().decode(plain);
+      try { return JSON.parse(text); } catch (_) { return text; }
+    } catch (_) {
+      return null;
+    }
   }
-
-  try {
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const strData = typeof data === 'string' ? data : JSON.stringify(data);
-    const enc = new TextEncoder();
-    const encoded = enc.encode(strData);
-
-    const ciphertext = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
-      key,
-      encoded
-    );
-
-    const ivArr = Array.from(iv);
-    const ctArr = Array.from(new Uint8Array(ciphertext));
-    return `enc_v1:${JSON.stringify({ iv: ivArr, ct: ctArr })}`;
-  } catch (err) {
-    console.warn('[CryptoStorage] Encrypt failed:', err);
-    return typeof data === 'string' ? data : JSON.stringify(data);
-  }
+  try { return JSON.parse(raw); } catch (_) { return raw; }
 }
 
 /**
- * Decrypt an AES-GCM 256 ciphertext
+ * Одноразовая миграция со старого формата: расшифровать, пересохранить в v2,
+ * удалить старые ключи и соль. Пароль сводится к одной записи.
  */
-async function decryptValue(rawVal) {
-  if (typeof rawVal !== 'string') return rawVal;
-  if (!rawVal.startsWith('enc_v1:')) {
-    // Unencrypted or legacy string
-    try {
-      return JSON.parse(rawVal);
-    } catch (_) {
-      return rawVal;
+async function migrateLegacy() {
+  const keys = lsKeys();
+  const hasLegacy = keys.some((k) =>
+    k === LEGACY_SALT_KEY ||
+    LEGACY_KEYS.includes(k) ||
+    (isSensitiveKey(k) && !(lsGet(k) || '').startsWith(PREFIX_V2))
+  );
+  if (!hasLegacy) return;
+
+  const v1Key = await legacyV1Key();
+
+  // 1. Обычные чувствительные ключи, лежащие не в v2
+  for (const k of keys) {
+    if (!isSensitiveKey(k)) continue;
+    const raw = lsGet(k);
+    if (!raw || raw.startsWith(PREFIX_V2)) continue;
+    const val = await readLegacy(v1Key, raw);
+    lsRemove(k);
+    if (val !== null && val !== undefined && !memoryVault.has(k)) {
+      // кэш старого формата бывал вида {data, timestamp} в открытом виде — сохраняем как есть
+      await cryptoStorage.setItem(k, val);
     }
   }
 
-  const key = await getOrDeriveKey();
-  if (!key || typeof crypto === 'undefined' || !crypto.subtle) {
-    return null;
+  // 2. Логин/пароль: три старые копии -> одна запись
+  const login = await readLegacy(v1Key, lsGet('saved_login'));
+  const password = await readLegacy(v1Key, lsGet('saved_password'));
+  const owa = await readLegacy(v1Key, lsGet('msal_owa_credentials'));
+  const legacyToken = await readLegacy(v1Key, lsGet('token'));
+  if (!memoryVault.has(CREDENTIALS_KEY)) {
+    const l = (typeof login === 'string' && login) || owa?.username || null;
+    const p = (typeof password === 'string' && password) || owa?.password || null;
+    if (l && p) {
+      const rec = { login: l, password: p };
+      if (owa?.username && owa.username !== l) rec.mailLogin = owa.username;
+      if (owa?.password && owa.password !== p) rec.mailPassword = owa.password;
+      await cryptoStorage.setItem(CREDENTIALS_KEY, rec);
+    }
+  }
+  if (typeof legacyToken === 'string' && legacyToken && !memoryVault.has('access_token')) {
+    await cryptoStorage.setItem('access_token', legacyToken);
+  }
+
+  // 3. Сессия почты (раньше лежала открытым текстом)
+  if (!memoryVault.has('msal_mail_session')) {
+    let cookies = null;
+    try { cookies = JSON.parse(lsGet('msal_mail_cookies') || 'null'); } catch (_) {}
+    const canary = lsGet('msal_mail_canary');
+    const currentUser = lsGet('msal_mail_currentUser');
+    if (cookies || canary || currentUser) {
+      await cryptoStorage.setItem('msal_mail_session', { cookies: cookies || {}, canary, currentUser });
+    }
+  }
+
+  for (const k of LEGACY_KEYS) lsRemove(k);
+  lsRemove(LEGACY_SALT_KEY);
+}
+
+async function doInit() {
+  if (typeof localStorage === 'undefined') return;
+  const key = await getDataKey();
+
+  if (key) {
+    const targets = lsKeys().filter((k) => isSensitiveKey(k) && (lsGet(k) || '').startsWith(PREFIX_V2));
+    await Promise.all(targets.map(async (k) => {
+      if (memoryVault.has(k)) return;
+      try {
+        memoryVault.set(k, await decryptValue(key, lsGet(k)));
+      } catch (_) {
+        // ключ сменился/данные повреждены — выбрасываем
+        lsRemove(k);
+      }
+    }));
   }
 
   try {
-    const jsonStr = rawVal.slice(7);
-    const { iv, ct } = JSON.parse(jsonStr);
-    const ivBuf = new Uint8Array(iv);
-    const ctBuf = new Uint8Array(ct);
-
-    const decrypted = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: ivBuf },
-      key,
-      ctBuf
-    );
-
-    const dec = new TextDecoder();
-    const text = dec.decode(decrypted);
-    try {
-      return JSON.parse(text);
-    } catch (_) {
-      return text;
-    }
+    await migrateLegacy();
   } catch (err) {
-    console.warn('[CryptoStorage] Decrypt failed:', err);
-    return null;
+    console.warn('[CryptoStorage] Legacy migration failed:', err?.message);
   }
 }
 
 export const cryptoStorage = {
   /**
-   * Pre-load critical keys and cached API data from disk into fast RAM cache
+   * Загружает ключ и расшифровывает хранилище в RAM.
+   * Вызывается один раз до рендера приложения; повторные вызовы дешёвые.
    */
-  async init() {
-    if (typeof localStorage === 'undefined') return;
-
-    const coreKeys = [
-      'access_token',
-      'refresh_token',
-      'cached_user',
-      'saved_login',
-      'saved_password',
-      'msal_owa_credentials',
-      'msal_owa_session'
-    ];
-
-    const targetKeys = [...coreKeys];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith('msal_cache_') && !targetKeys.includes(key)) {
-        targetKeys.push(key);
-      }
+  init() {
+    if (!initPromise) {
+      initPromise = doInit().catch((err) => {
+        console.warn('[CryptoStorage] init failed:', err?.message);
+      });
     }
-
-    await Promise.all(
-      targetKeys.map(async (k) => {
-        const rawVal = localStorage.getItem(k);
-        if (rawVal !== null && !memoryVault.has(k)) {
-          const decrypted = await decryptValue(rawVal);
-          if (decrypted !== null) {
-            memoryVault.set(k, decrypted);
-          }
-        }
-      })
-    );
+    return initPromise;
   },
 
-  /**
-   * Asynchronously store an encrypted value in localStorage and memory
-   */
   async setItem(key, value) {
     if (!key) return;
-    memoryVault.set(key, value);
-
-    if (typeof localStorage === 'undefined') return;
+    const seq = (writeSeq.get(key) || 0) + 1;
+    writeSeq.set(key, seq);
 
     if (value === null || value === undefined) {
-      localStorage.removeItem(key);
       memoryVault.delete(key);
+      lsRemove(key);
       return;
     }
+    memoryVault.set(key, value);
+    if (typeof localStorage === 'undefined') return;
 
+    const dek = await getDataKey();
+    if (!dek) {
+      // Безопасного хранилища нет — не пишем на диск вообще
+      lsRemove(key);
+      return;
+    }
     try {
-      const encrypted = await encryptValue(value);
-      localStorage.setItem(key, encrypted);
+      const encrypted = await encryptValue(dek, value);
+      if (writeSeq.get(key) === seq) lsSet(key, encrypted);
     } catch (e) {
-      console.warn(`[CryptoStorage] Error writing ${key}:`, e);
+      console.warn(`[CryptoStorage] Error writing ${key}:`, e?.message);
     }
   },
 
-  /**
-   * Synchronously store in memory and schedule encrypted disk persistence
-   */
   setItemFast(key, value) {
     if (!key) return;
+    if (value === null || value === undefined) {
+      this.removeItem(key);
+      return;
+    }
     memoryVault.set(key, value);
-    // Non-blocking asynchronous encryption to disk
     this.setItem(key, value).catch(() => {});
   },
 
-  /**
-   * Read item with async decryption fallback
-   */
   async getItem(key) {
     if (!key) return null;
-    if (memoryVault.has(key)) {
-      return memoryVault.get(key);
-    }
-
-    if (typeof localStorage === 'undefined') return null;
-
-    const raw = localStorage.getItem(key);
-    if (!raw) return null;
-
-    const decrypted = await decryptValue(raw);
-    if (decrypted !== null) {
-      memoryVault.set(key, decrypted);
-    }
-    return decrypted;
+    await this.init();
+    return memoryVault.has(key) ? memoryVault.get(key) : null;
   },
 
-  /**
-   * Fast synchronous read from RAM cache
-   */
   getItemSync(key) {
     if (!key) return null;
-    return memoryVault.get(key) || null;
+    const v = memoryVault.get(key);
+    return v === undefined ? null : v;
   },
 
-  /**
-   * Remove item from memory and disk
-   */
+  hasItem(key) {
+    return memoryVault.has(key);
+  },
+
+  keys(prefix = '') {
+    return Array.from(memoryVault.keys()).filter((k) => k.startsWith(prefix));
+  },
+
   removeItem(key) {
     if (!key) return;
+    writeSeq.set(key, (writeSeq.get(key) || 0) + 1);
     memoryVault.delete(key);
-    if (typeof localStorage !== 'undefined') {
-      localStorage.removeItem(key);
-    }
+    lsRemove(key);
   },
 
   /**
-   * Complete secure purge of all sensitive student data and tokens
+   * Полная очистка: данные, кэш, сессии и сам ключ шифрования.
    */
   async purgeAll() {
+    for (const k of memoryVault.keys()) writeSeq.set(k, (writeSeq.get(k) || 0) + 1);
     memoryVault.clear();
-    const keysToRemove = [
-      'access_token',
-      'refresh_token',
-      'token',
-      'cached_user',
-      'saved_login',
-      'saved_password',
-      'msal_owa_credentials',
-      'msal_owa_session',
-      'msal_mail_cookies',
-      'msal_mail_canary',
-      'msal_mail_username'
-    ];
-
-    if (typeof localStorage !== 'undefined') {
-      const allKeys = Object.keys(localStorage);
-      for (const k of allKeys) {
-        if (k.startsWith('msal_') || keysToRemove.includes(k)) {
-          localStorage.removeItem(k);
-        }
+    for (const k of lsKeys()) {
+      if (k.startsWith('msal_') || isSensitiveKey(k) || LEGACY_KEYS.includes(k)) {
+        lsRemove(k);
       }
     }
+    await destroyDataKey();
+    initPromise = null;
   },
 
-  // Token Helpers
+  // ---------------- Tokens ----------------
   setTokens(accessToken, refreshToken = null) {
     if (accessToken) this.setItemFast('access_token', accessToken);
     if (refreshToken) this.setItemFast('refresh_token', refreshToken);
@@ -292,7 +327,7 @@ export const cryptoStorage = {
     return this.getItemSync('refresh_token');
   },
 
-  // User Profile Helpers
+  // ---------------- User profile ----------------
   setUser(userData) {
     if (userData) this.setItemFast('cached_user', userData);
   },
@@ -301,76 +336,55 @@ export const cryptoStorage = {
     return this.getItemSync('cached_user');
   },
 
-  // Persistent Credentials for Silent Re-auth & Mail SSO (AES-256 GCM)
+  // ---------------- Credentials (одна запись) ----------------
   saveCredentials(login, password) {
-    if (login && password) {
-      this.setItemFast('saved_login', login);
-      this.setItemFast('saved_password', password);
-      // Seamlessly sync credentials for Exchange OWA Single Sign-On
-      this.setItemFast('msal_owa_credentials', {
-        username: login,
-        password: password,
-        savedAt: Date.now()
-      });
-    }
+    if (!login || !password) return;
+    const prev = this.getItemSync(CREDENTIALS_KEY) || {};
+    const rec = { login, password };
+    // Отдельные данные почты сохраняем, только если они реально отличаются
+    if (prev.mailLogin && prev.mailLogin !== login) rec.mailLogin = prev.mailLogin;
+    this.setItemFast(CREDENTIALS_KEY, rec);
   },
 
-  // Alias for backward compatibility with authService
   setSavedCredentials(login, password) {
     return this.saveCredentials(login, password);
   },
 
   getSavedCredentials() {
-    return {
-      login: this.getItemSync('saved_login') || null,
-      password: this.getItemSync('saved_password') || null
-    };
+    const rec = this.getItemSync(CREDENTIALS_KEY);
+    return { login: rec?.login || null, password: rec?.password || null };
   },
 
   async getSavedCredentialsAsync() {
     await this.init();
-    let login = this.getItemSync('saved_login') || (await this.getItem('saved_login'));
-    let password = this.getItemSync('saved_password') || (await this.getItem('saved_password'));
-
-    if (!login || !password) {
-      const owa = this.getItemSync('msal_owa_credentials') || (await this.getItem('msal_owa_credentials'));
-      if (owa?.username && owa?.password) {
-        login = owa.username;
-        password = owa.password;
-      }
-    }
-
-    return { login: login || null, password: password || null };
+    return this.getSavedCredentials();
   },
 
-  // Mail Credentials Helpers (SSO with LK credentials)
   getMailCredentials() {
-    const owaCreds = this.getItemSync('msal_owa_credentials');
-    if (owaCreds && owaCreds.username && owaCreds.password) {
-      return owaCreds;
-    }
-    const saved = this.getSavedCredentials();
-    if (saved && saved.login && saved.password) {
-      return {
-        username: saved.login,
-        password: saved.password
-      };
-    }
-    return null;
+    const rec = this.getItemSync(CREDENTIALS_KEY);
+    if (!rec) return null;
+    const username = rec.mailLogin || rec.login;
+    const password = rec.mailPassword || rec.password;
+    return username && password ? { username, password } : null;
   },
 
   setMailCredentials(username, password) {
-    if (username && password) {
-      this.setItemFast('msal_owa_credentials', {
-        username,
-        password,
-        savedAt: Date.now()
-      });
-      this.saveCredentials(username, password);
+    if (!username || !password) return;
+    const prev = this.getItemSync(CREDENTIALS_KEY);
+    if (!prev?.login) {
+      this.setItemFast(CREDENTIALS_KEY, { login: username, password });
+      return;
     }
+    const rec = { login: prev.login, password: prev.password };
+    if (username !== prev.login) rec.mailLogin = username;
+    if (password !== prev.password) rec.mailPassword = password;
+    this.setItemFast(CREDENTIALS_KEY, rec);
   },
 
   clearMailCredentials() {
-    this.removeItem('msal_owa_credentials');
+    const prev = this.getItemSync(CREDENTIALS_KEY);
+    if (prev && (prev.mailLogin || prev.mailPassword)) {
+      this.setItemFast(CREDENTIALS_KEY, { login: prev.login, password: prev.password });
+    }
   }
 };

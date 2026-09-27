@@ -7,10 +7,14 @@
  * Invariant: If device is offline or university server is unreachable, latest valid cache is returned.
  */
 
-const CACHE_PREFIX = "msal_cache_";
-const memoryCache = new Map();
+import { cryptoStorage } from './cryptoStorage.js';
 
-// Run immediate cleanup of legacy/orphaned keys from early builds
+const CACHE_PREFIX = "msal_cache_";
+
+// Кэш хранится через cryptoStorage: в RAM — расшифрованный, на диске — AES-GCM (v2).
+// cryptoStorage.init() расшифровывает все msal_cache_* до рендера, поэтому чтение синхронное.
+
+// Удаляем мусор ранних сборок
 if (typeof localStorage !== 'undefined') {
   try {
     for (let i = localStorage.length - 1; i >= 0; i--) {
@@ -22,71 +26,27 @@ if (typeof localStorage !== 'undefined') {
   } catch (_) {}
 }
 
+function readPayload(key) {
+  const payload = cryptoStorage.getItemSync(`${CACHE_PREFIX}${key}`);
+  return payload && typeof payload === 'object' && 'data' in payload ? payload : null;
+}
+
 export const cacheService = {
   /**
-   * Save data to local cache with timestamp
-   * Instantly available in memory and persisted synchronously to localStorage
+   * Save data to local cache with timestamp (RAM сразу, диск — асинхронно и зашифрованно)
    */
   set(key, data) {
     if (!key || data === undefined) return;
-    try {
-      const payload = {
-        data,
-        timestamp: Date.now()
-      };
-
-      // 1. Instant RAM cache
-      memoryCache.set(key, payload);
-
-      // 2. Synchronous disk persistence
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem(`${CACHE_PREFIX}${key}`, JSON.stringify(payload));
-      }
-    } catch (e) {
-      console.warn(`[Cache] Failed to write cache for key "${key}":`, e.message);
-    }
+    cryptoStorage.setItemFast(`${CACHE_PREFIX}${key}`, { data, timestamp: Date.now() });
   },
 
   /**
    * Synchronously read data from local cache
-   * Checks RAM first, then localStorage
    */
   get(key) {
     if (!key) return null;
-
-    // 1. Check in-memory Map
-    if (memoryCache.has(key)) {
-      const mem = memoryCache.get(key);
-      if (mem && mem.data !== undefined) {
-        return mem.data;
-      }
-    }
-
-    // 2. Check localStorage
-    if (typeof localStorage === 'undefined') return null;
-
-    try {
-      const raw = localStorage.getItem(`${CACHE_PREFIX}${key}`);
-      if (!raw) return null;
-
-      // Handle legacy encrypted prefix if present
-      if (raw.startsWith('enc_v1:')) {
-        // Discard legacy encrypted entry so it doesn't mask fresh data
-        localStorage.removeItem(`${CACHE_PREFIX}${key}`);
-        return null;
-      }
-
-      const parsed = JSON.parse(raw);
-      if (parsed && parsed.data !== undefined) {
-        memoryCache.set(key, parsed);
-        return parsed.data;
-      }
-
-      return null;
-    } catch (e) {
-      console.warn(`[Cache] Failed to parse cache for key "${key}":`, e.message);
-      return null;
-    }
+    const payload = readPayload(key);
+    return payload && payload.data !== undefined ? payload.data : null;
   },
 
   /**
@@ -102,18 +62,7 @@ export const cacheService = {
    */
   getInfo(key) {
     if (!key) return null;
-
-    let payload = memoryCache.get(key);
-    if (!payload && typeof localStorage !== 'undefined') {
-      try {
-        const raw = localStorage.getItem(`${CACHE_PREFIX}${key}`);
-        if (raw && !raw.startsWith('enc_v1:')) {
-          payload = JSON.parse(raw);
-          if (payload) memoryCache.set(key, payload);
-        }
-      } catch (_) {}
-    }
-
+    const payload = readPayload(key);
     if (payload && payload.timestamp) {
       return {
         timestamp: payload.timestamp,
@@ -129,19 +78,16 @@ export const cacheService = {
    */
   remove(key) {
     if (!key) return;
-    memoryCache.delete(key);
-    if (typeof localStorage !== 'undefined') {
-      try {
-        localStorage.removeItem(`${CACHE_PREFIX}${key}`);
-      } catch (_) {}
-    }
+    cryptoStorage.removeItem(`${CACHE_PREFIX}${key}`);
   },
 
   /**
    * Clear all cached data
    */
   clear() {
-    memoryCache.clear();
+    for (const k of cryptoStorage.keys(CACHE_PREFIX)) {
+      cryptoStorage.removeItem(k);
+    }
     if (typeof localStorage !== 'undefined') {
       try {
         for (let i = localStorage.length - 1; i >= 0; i--) {

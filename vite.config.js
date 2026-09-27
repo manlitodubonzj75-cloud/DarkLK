@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [react()],
   base: './',
   server: {
-    host: true,
+    host: 'localhost',
     port: 5173,
     proxy: {
       '/api': {
@@ -40,6 +40,6 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    sourcemap: true
+    sourcemap: false
   }
 })
