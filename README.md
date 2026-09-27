@@ -32,8 +32,8 @@
 1. Установите бесплатное расширение **[Userscripts в App Store](https://apps.apple.com/app/userscripts/id1463298887)** (или **Stay**).
 2. Откройте **Настройки ➔ Safari ➔ Расширения ➔ Userscripts** и включите его. Выдайте разрешение «Всегда разрешать» для `lk.msal.ru`.
 3. Откройте в Safari прямую ссылку на скрипт:
-   👉 **[Установить DarkMSAL Userscript](https://raw.githubusercontent.com/manlitodubonzj75-cloud/MSALka-sova-skakalka/main/darkmsal.user.js)**  
-   *(Резервное зеркало: `https://cdn.jsdelivr.net/gh/manlitodubonzj75-cloud/MSALka-sova-skakalka@main/darkmsal.user.js`)*
+   👉 **[Установить DarkMSAL Userscript](https://raw.githubusercontent.com/manlitodubonzj75-cloud/DarkLK/main/release/darkmsal.user.js)**  
+   *(Резервное зеркало: `https://cdn.jsdelivr.net/gh/manlitodubonzj75-cloud/DarkLK@main/release/darkmsal.user.js`)*
 4. В появившемся окне расширения нажмите **Install** (Установить).
 5. Перейдите на [https://lk.msal.ru/](https://lk.msal.ru/) — сайт откроется в тёмном интерфейсе DarkMSAL!
 6. **Ярлык на экран «Домой»**: В приложении «Быстрые команды» (Shortcuts) создайте команду: *Открыть URL `https://lk.msal.ru/`* ➔ *Добавить на экран «Домой»*.
@@ -54,7 +54,7 @@
 
 #### Альтернатива на Android (через браузер):
 - В браузере **Firefox**, **Kiwi** или **Yandex Browser** установите расширение **Tampermonkey**.
-- В настройках Tampermonkey ➔ **Утилиты** ➔ вставьте ссылку на скрипт и нажмите «Установить».
+- В настройках Tampermonkey ➔ **Утилиты** ➔ вставьте ссылку на скрипт (`https://raw.githubusercontent.com/manlitodubonzj75-cloud/DarkLK/main/release/darkmsal.user.js`) и нажмите «Установить».
 - Либо используйте легковесный браузер **Via Browser** (Настройки ➔ Скрипты ➔ Добавить по URL).
 
 ---
@@ -105,6 +105,10 @@
 
 ### Подготовка окружения
 ```bash
+# Клонирование репозитория
+git clone git@github.com:manlitodubonzj75-cloud/DarkLK.git
+cd DarkLK
+
 # Установка Node.js зависимостей
 npm install
 ```
@@ -127,7 +131,7 @@ npm install
 ## 📁 Структура проекта
 
 ```
-msalka/
+DarkLK/
 ├── .github/workflows/          # CI/CD автоматической сборки мультиплатформенных релизов
 ├── android/                    # Нативный проект Android (Capacitor 7 + Gradle)
 ├── ios/                        # Нативный проект iOS (Capacitor 7 + Xcode Workspace)
@@ -153,5 +157,5 @@ msalka/
 - **152-ФЗ РФ**: Все персональные данные обрабатываются исключительно на конечном устройстве пользователя в строгом соответствии с Федеральным законом «О персональных данных» от 27.07.2006 № 152-ФЗ.
 - **Отказ от ответственности**: Приложение разработано сообществом студентов для улучшения пользовательского опыта и не является официальным продуктом Университета имени О.Е. Кутафина (МГЮА).
 - **Служба поддержки**: Официальный бот в Telegram [@DarkMSAL_supportbot](https://t.me/DarkMSAL_supportbot).
-- **Репозиторий проекта**: [https://github.com/Dewerro67/MSALKA](https://github.com/Dewerro67/MSALKA).
+- **Репозиторий проекта**: [https://github.com/manlitodubonzj75-cloud/DarkLK](https://github.com/manlitodubonzj75-cloud/DarkLK).
 - **Автономный Userscript-репозиторий**: [https://github.com/manlitodubonzj75-cloud/MSALka-sova-skakalka](https://github.com/manlitodubonzj75-cloud/MSALka-sova-skakalka).
