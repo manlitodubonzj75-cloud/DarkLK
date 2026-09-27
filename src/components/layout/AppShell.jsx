@@ -6,65 +6,22 @@ import { Icons } from '../common/Icons';
 import { Logo } from '../common/Logo';
 import { LegalModal } from '../common/LegalModal';
 import { UpdateModal } from '../common/UpdateModal';
-import { PullToRefresh } from '../common/PullToRefresh';
-import { updateService } from '../../api';
+import { updateService } from '../../api/updateService';
+import { PullToRefresh } from "../common/PullToRefresh";
 
 export const AppShell = () => {
-  const { user, isCollege, logout } = useAuth();
+  const { user, logout, isCollege, isOffline, isSyncing, lastSyncTime, retrySync } = useAuth();
   const { isDark, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
-
-  // Route awareness (e.g. Mail takes full viewport)
   const isMailRoute = location.pathname.startsWith('/mail');
-
-  // Offline & Synchronization Awareness
-  const [isOffline, setIsOffline] = React.useState(!navigator.onLine);
-  const [isSyncing, setIsSyncing] = React.useState(false);
-  const [lastSyncTime, setLastSyncTime] = React.useState(() => {
-    const saved = localStorage.getItem("msal_last_sync_timestamp");
-    return saved ? parseInt(saved, 10) : null;
-  });
-
-  // Modal Dialogs
   const [legalModalTab, setLegalModalTab] = React.useState(null);
-  const [showUpdateModal, setShowUpdateModal] = React.useState(false);
+  const [isRefreshing, setIsRefreshing] = React.useState(false);
   const [updateInfo, setUpdateInfo] = React.useState(null);
-
-  // Check for updates automatically in background once on load
-  React.useEffect(() => {
-    let isMounted = true;
-    const timer = setTimeout(async () => {
-      try {
-        const res = await updateService.checkForUpdates({ force: false });
-        if (isMounted && res?.hasUpdate) {
-          setUpdateInfo(res);
-          setShowUpdateModal(true);
-        }
-      } catch (err) {
-        console.warn("[AppShell] Auto update check failed:", err.message);
-      }
-    }, 2500);
-
-    const handleManualCheck = (e) => {
-      if (e.detail && isMounted) {
-        setUpdateInfo(e.detail);
-        setShowUpdateModal(true);
-      }
-    };
-
-    window.addEventListener("app-show-update-modal", handleManualCheck);
-    return () => {
-      isMounted = false;
-      clearTimeout(timer);
-      window.removeEventListener("app-show-update-modal", handleManualCheck);
-    };
-  }, []);
-
+  const [showUpdateModal, setShowUpdateModal] = React.useState(false);
   const [showLegalGate, setShowLegalGate] = React.useState(() => {
     return !Boolean(localStorage.getItem("msal_legal_accepted_v1"));
   });
-  const [photoError, setPhotoError] = React.useState(false);
 
   const ALL_NAV_ITEMS = [
     { to: '/', label: 'Главная', icon: Icons.Home },
@@ -73,14 +30,11 @@ export const AppShell = () => {
     { to: '/recordbook', label: 'Зачётка', icon: Icons.BookOpen },
     { to: '/mail', label: 'Почта', icon: Icons.Mail },
     { to: '/consultations', label: 'Отработки', icon: Icons.UserCheck },
-    { to: '/settings', label: 'Настройки', icon: Icons.Settings },
   ];
 
   const NAV_ITEMS = isCollege
     ? ALL_NAV_ITEMS.filter(item => item.to !== '/consultations')
     : ALL_NAV_ITEMS;
-
-  const MOBILE_NAV_ITEMS = NAV_ITEMS.filter(item => item.to !== '/settings');
 
   const getInitials = (name = '') => {
     if (!name || typeof name !== 'string') return '??';
@@ -91,7 +45,7 @@ export const AppShell = () => {
     return name.slice(0, 2).toUpperCase();
   };
 
-  const photoUrl = (!photoError && typeof user?.photo === 'string' && user.photo.trim())
+  const photoUrl = (typeof user?.photo === 'string' && user.photo.trim())
     ? (user.photo.startsWith('http') ? user.photo : `https://lk.msal.ru:3443/${user.photo}`)
     : null;
 
@@ -104,34 +58,54 @@ export const AppShell = () => {
     if (diffMin < 1) return 'только что';
     if (diffMin < 60) return `${diffMin} мин. назад`;
 
-    return date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-  };
-
-  const retrySync = () => {
-    setIsSyncing(true);
-    window.dispatchEvent(new CustomEvent('app-pull-to-refresh'));
-    setTimeout(() => {
-      setIsSyncing(false);
-      setLastSyncTime(Date.now());
-      setIsOffline(!navigator.onLine);
-    }, 1500);
+    return date.toLocaleDateString('ru-RU', {
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
   };
 
   React.useEffect(() => {
-    const handleOnline = () => setIsOffline(false);
-    const handleOffline = () => setIsOffline(true);
+    const timer = setTimeout(async () => {
+      const res = await updateService.checkForUpdates({ force: false });
+      if (res?.hasUpdate) {
+        setUpdateInfo(res);
+        setShowUpdateModal(true);
+      }
+    }, 2500);
 
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
+    const handleManualCheckEvent = (e) => {
+      if (e.detail) {
+        setUpdateInfo(e.detail);
+        setShowUpdateModal(true);
+      }
+    };
+
+    window.addEventListener('app-show-update-modal', handleManualCheckEvent);
 
     return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
+      clearTimeout(timer);
+      window.removeEventListener('app-show-update-modal', handleManualCheckEvent);
     };
   }, []);
 
+  const handleManualRefresh = async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    window.dispatchEvent(new CustomEvent('app-pull-to-refresh'));
+    if (retrySync) {
+      try {
+        await retrySync();
+      } catch (_) {}
+    }
+    setTimeout(() => {
+      setIsRefreshing(false);
+    }, 850);
+  };
+
   return (
-    <div className="flex h-screen w-full bg-bg dark:bg-[#12151B] text-dark dark:text-white font-sans overflow-hidden transition-colors duration-200">
+    <div className="flex h-full h-[100dvh] w-full bg-bg dark:bg-[#12151B] text-dark dark:text-white font-sans overflow-hidden transition-colors duration-200">
       {/* DESKTOP SIDEBAR */}
       <aside className="hidden md:flex flex-col w-64 h-full bg-primary dark:bg-[#12151B] text-white border-r border-white/10 dark:border-[#212634] shadow-xl z-20 shrink-0">
         {/* Logo */}
@@ -139,125 +113,114 @@ export const AppShell = () => {
           <Logo size={42} className="shrink-0 ring-1 ring-white/20" />
           <div className="min-w-0">
             <h1 className="text-white font-black text-lg tracking-wide leading-tight">DarkMSAL</h1>
-            <p className="text-[10px] text-white/70 dark:text-[#8E98A8] font-medium leading-tight truncate">
-              для Альма Матер с любовью.
-            </p>
+            <p className="text-[10px] text-white/70 dark:text-[#8E98A8] font-medium leading-tight truncate">для Альма Матер с любовью.</p>
           </div>
         </div>
 
         {/* User Profile Card */}
         <div
           onClick={() => navigate('/settings')}
-          className="p-3 mx-3 my-4 rounded-2xl bg-white/10 dark:bg-[#1F2430] hover:bg-white/15 dark:hover:bg-[#262D3D] active:scale-[0.98] flex items-center space-x-3 cursor-pointer transition-all border border-white/10 dark:border-[#2B3242] group shadow-sm"
-          title="Открыть профиль и настройки"
+          className="p-4 mx-3 my-4 rounded-2xl bg-white/10 dark:bg-[#1F2430] border border-white/10 dark:border-[#283245] flex items-center space-x-3 cursor-pointer hover:bg-white/15 dark:hover:bg-[#257C9F] transition-all group"
         >
           {photoUrl ? (
-            <img
-              src={photoUrl}
-              alt="Avatar"
-              onError={() => setPhotoError(true)}
-              className="w-10 h-10 rounded-full object-cover border-2 border-accent dark:border-[#22869A] shrink-0 group-hover:scale-105 transition-transform"
-            />
+            <img src={photoUrl} alt="Avatar" className="w-12 h-12 rounded-full object-cover border-2 border-white/30 dark:border-[#283245] shadow-inner shrink-0 group-hover:scale-105 transition-transform" />
           ) : (
-            <div className="w-10 h-10 rounded-full bg-accent dark:bg-[#22869A] flex items-center justify-center font-bold text-white text-sm shrink-0 group-hover:scale-105 transition-transform">
+            <div className="w-12 h-12 rounded-full bg-accent dark:bg-[#22869A] flex items-center justify-center font-bold text-base text-white shadow-inner shrink-0 group-hover:scale-105 transition-transform">
               {getInitials(user?.name)}
             </div>
           )}
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-bold truncate text-white">
+          <div className="min-w-0 flex-1">
+            <h3 className="text-sm font-bold text-white truncate group-hover:text-accent dark:group-hover:text-white transition-colors">
               {user?.name || 'Студент'}
-            </p>
-            <p className="text-xs text-white/70 dark:text-[#8E98A8] truncate">
-              {user?.group ? `Группа ${user.group}` : (user?.speciality || user?.role || 'Студент')}
+            </h3>
+            <p className="text-xs text-white/70 dark:text-[#8E98A8] truncate mt-0.5">
+              {user?.group || 'Группа не указана'}
             </p>
           </div>
+          <Icons.ChevronRight size={16} className="text-white/40 group-hover:text-white group-hover:translate-x-0.5 transition-all shrink-0" />
         </div>
 
-        {/* Navigation list */}
-        <nav className="flex-1 px-3 space-y-1.5 overflow-y-auto">
-          {NAV_ITEMS.map(item => (
+        {/* Navigation Links */}
+        <nav className="flex-1 px-3 space-y-1.5 overflow-y-auto no-scrollbar">
+          {NAV_ITEMS.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
               end={item.to === '/'}
               className={({ isActive }) =>
-                `flex items-center space-x-3 px-4 py-3 rounded-2xl font-semibold text-sm transition-all duration-150 ${
+                `flex items-center space-x-3 px-3.5 py-3 rounded-xl text-sm font-semibold transition-all ${
                   isActive
-                    ? 'bg-card text-primary dark:bg-[#1E6685] dark:text-white shadow-sm font-bold'
-                    : 'text-white/80 dark:text-[#8E98A8] hover:bg-white/10 dark:hover:bg-[#1F2430] dark:hover:text-white'
+                    ? 'bg-white/20 dark:bg-[#1E6685] text-white shadow-md'
+                    : 'text-white/80 dark:text-[#8E98A8] hover:bg-white/10 dark:hover:bg-[#1E2430] hover:text-white'
                 }`
               }
             >
               <item.icon size={20} className="shrink-0" />
-              <span>{item.label}</span>
+              <span className="truncate">{item.label}</span>
             </NavLink>
           ))}
         </nav>
 
-        {/* Legal & version sub-bar */}
-        <div className="px-4 py-2 border-t border-white/5 dark:border-[#1E2330] flex items-center justify-between text-[10px] text-white/50 dark:text-[#8E98A8]">
-          <button onClick={() => setLegalModalTab('terms')} className="hover:underline hover:text-white transition-colors">
-            Условия
+        {/* Desktop Manual Refresh Button */}
+        <div className="px-3 py-2">
+          <button
+            onClick={handleManualRefresh}
+            disabled={isRefreshing}
+            className="w-full flex items-center justify-center space-x-2.5 px-3.5 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 dark:bg-[#1E2430] dark:hover:bg-[#272F3F] text-white/90 text-xs font-semibold transition-all active:scale-95 border border-white/10 dark:border-[#283245] shadow-sm disabled:opacity-50"
+            title="Обновить данные расписания и оценок с сервера"
+          >
+            <Icons.Refresh size={16} className={`shrink-0 ${isRefreshing ? 'animate-spin text-accent dark:text-[#38BDF8]' : ''}`} />
+            <span>{isRefreshing ? 'Обновление данных...' : 'Обновить данные'}</span>
           </button>
-          <span>•</span>
-          <button onClick={() => setLegalModalTab('privacy')} className="hover:underline hover:text-white transition-colors">
-            Конфиденциальность
-          </button>
-          <span>•</span>
-          <span className="font-mono opacity-80">v1.0</span>
         </div>
 
-        {/* Bottom controls */}
+        {/* Legal & version sub-bar */}
+        <div className="px-4 py-2 border-t border-white/5 dark:border-[#1E2330] flex items-center justify-between text-[10px] text-white/50 dark:text-[#8E98A8]">
+          <button
+            onClick={() => setLegalModalTab('privacy')}
+            className="hover:underline hover:text-white/80 transition-colors"
+          >
+            152-ФЗ / Безопасность
+          </button>
+          <span>v1.0.0</span>
+        </div>
+
+        {/* Theme Toggle & Logout */}
         <div className="p-4 border-t border-white/10 dark:border-[#212634] flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={() => navigate('/settings')}
-              className="w-9 h-9 rounded-xl bg-white/10 dark:bg-[#22869A] hover:bg-white/20 dark:hover:bg-[#1E6685] flex items-center justify-center text-white transition-colors"
-              title="Настройки приложения"
-            >
-              <Icons.Settings size={18} />
-            </button>
-            <button
-              onClick={toggleTheme}
-              className="w-9 h-9 rounded-xl bg-white/10 dark:bg-[#1F2430] hover:bg-white/20 dark:hover:bg-[#262D3D] flex items-center justify-center text-white dark:text-[#8E98A8] dark:hover:text-white transition-colors"
-              title={isDark ? 'Включить светлую тему' : 'Включить тёмную тему'}
-            >
-              {isDark ? <Icons.Sun size={18} /> : <Icons.Moon size={18} />}
-            </button>
-          </div>
+          <button
+            onClick={toggleTheme}
+            className="flex items-center space-x-2 text-xs font-semibold text-white/80 dark:text-[#8E98A8] hover:text-white transition-colors"
+          >
+            {isDark ? <Icons.Sun size={18} /> : <Icons.Moon size={18} />}
+            <span>{isDark ? 'Светлая' : 'Тёмная'}</span>
+          </button>
 
           <button
             onClick={() => {
               logout();
               navigate('/login');
             }}
-            className="flex items-center space-x-2 text-xs font-semibold text-rose-300 dark:text-[#8E98A8] hover:text-rose-400 dark:hover:text-rose-400 px-3 py-2 rounded-xl hover:bg-white/10 dark:hover:bg-[#1F2430] transition-colors"
+            className="p-2 rounded-xl text-white/70 hover:text-rose-400 hover:bg-white/10 transition-colors"
             title="Выйти из аккаунта"
           >
-            <Icons.LogOut size={16} />
-            <span>Выйти</span>
+            <Icons.LogOut size={18} />
           </button>
         </div>
       </aside>
 
-      {/* MAIN VIEWPORT */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
+      {/* MAIN VIEW AREA */}
+      <div className="flex-1 flex flex-col h-full overflow-hidden">
         {/* Mobile Header Bar */}
         <header className="md:hidden flex items-center justify-between px-4 py-3 bg-card dark:bg-[#1F2430] border-b border-border dark:border-[#212634] z-10 shrink-0 pt-[max(0.75rem,env(safe-area-inset-top))]">
           <div
             onClick={() => navigate('/settings')}
-            className="flex items-center space-x-3 cursor-pointer hover:opacity-85 transition-opacity min-w-0"
+            className="flex items-center space-x-3 cursor-pointer hover:opacity-85 transition-opacity"
             title="Открыть профиль и настройки"
           >
             {photoUrl ? (
-              <img
-                src={photoUrl}
-                alt="Avatar"
-                onError={() => setPhotoError(true)}
-                className="w-9 h-9 rounded-full object-cover border border-accent dark:border-[#22869A] shrink-0"
-              />
+              <img src={photoUrl} alt="Avatar" className="w-9 h-9 rounded-full object-cover border border-accent dark:border-[#22869A]" />
             ) : (
-              <div className="w-9 h-9 rounded-full bg-accent dark:bg-[#22869A] flex items-center justify-center font-bold text-white text-xs shrink-0">
+              <div className="w-9 h-9 rounded-full bg-accent dark:bg-[#22869A] flex items-center justify-center font-bold text-white text-xs">
                 {getInitials(user?.name)}
               </div>
             )}
@@ -266,16 +229,15 @@ export const AppShell = () => {
                 {user?.name || 'Студент'}
               </h2>
               <p className="text-[11px] text-textMuted dark:text-[#8E98A8] truncate">
-                {user?.group ? `Группа ${user.group}` : (user?.speciality || 'МГЮА')}
+                {user?.group || 'МГЮА'}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center space-x-1 shrink-0">
+          <div className="flex items-center space-x-1">
             <button
               onClick={toggleTheme}
               className="p-2 rounded-xl text-textMuted dark:text-[#8E98A8] hover:bg-bg dark:hover:bg-[#262D3D]"
-              title={isDark ? 'Включить светлую тему' : 'Включить тёмную тему'}
             >
               {isDark ? <Icons.Sun size={18} /> : <Icons.Moon size={18} />}
             </button>
@@ -285,17 +247,16 @@ export const AppShell = () => {
                 navigate('/login');
               }}
               className="p-2 rounded-xl text-textMuted dark:text-[#8E98A8] hover:text-rose-500"
-              title="Выйти"
             >
               <Icons.LogOut size={18} />
             </button>
           </div>
         </header>
 
-        {/* Global Offline/Stale Banner */}
+        {/* Global Offline / Cached Data Banner */}
         {isOffline && (
-          <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-2 flex items-center justify-between text-xs text-amber-800 dark:text-amber-200 shrink-0">
-            <div className="flex items-center space-x-2 truncate">
+          <div className="bg-amber-500/15 dark:bg-amber-500/20 border-b border-amber-500/30 text-amber-800 dark:text-amber-200 px-4 py-2 flex items-center justify-between text-xs transition-all shrink-0 z-10">
+            <div className="flex items-center space-x-2 min-w-0">
               <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse shrink-0" />
               <span className="font-medium truncate">
                 Автономный режим • Данные из кэша (актуально на: {formatSyncTime(lastSyncTime)})
@@ -308,15 +269,15 @@ export const AppShell = () => {
               title="Повторить попытку подключения к серверу"
             >
               <Icons.Refresh size={12} className={isSyncing ? "animate-spin" : ""} />
-              <span>Повторить</span>
+              <span>{isSyncing ? "Синхронизация..." : "Обновить"}</span>
             </button>
           </div>
         )}
 
         {/* Scrollable Page Body with Single Root Pull-to-Refresh */}
-        <main className="flex-1 overflow-hidden min-h-0 min-w-0 bg-bg dark:bg-[#12151B] w-full flex flex-col">
+        <main className="flex-1 overflow-hidden bg-bg dark:bg-[#12151B] w-full min-w-0 flex flex-col">
           {isMailRoute ? (
-            <div className="h-full w-full flex-1 min-h-0 min-w-0 overflow-hidden flex flex-col">
+            <div className="h-full w-full flex-1 min-w-0 overflow-hidden flex flex-col pb-16 md:pb-0">
               <Outlet />
             </div>
           ) : (
@@ -329,22 +290,22 @@ export const AppShell = () => {
         </main>
 
         {/* MOBILE BOTTOM NAVIGATION BAR */}
-        <nav className="md:hidden flex items-center justify-around bg-card dark:bg-[#12151B] border-t border-border dark:border-[#212634] py-2 px-1 z-20 pb-[max(0.6rem,env(safe-area-inset-bottom))] shrink-0 shadow-lg">
-          {MOBILE_NAV_ITEMS.map(item => (
+        <nav className="md:hidden flex items-center justify-around bg-card dark:bg-[#1F2430] border-t border-border dark:border-[#212634] px-1 py-1.5 z-10 shrink-0 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+          {NAV_ITEMS.map(item => (
             <NavLink
               key={item.to}
               to={item.to}
               end={item.to === '/'}
               className={({ isActive }) =>
-                `flex flex-col items-center py-1 px-2.5 rounded-2xl transition-all ${
+                `flex flex-col items-center py-1 px-2 rounded-xl transition-all ${
                   isActive
-                    ? 'text-primary dark:text-[#38BDF8] font-bold dark:bg-[#1E6685]/30'
+                    ? 'text-primary dark:text-[#38BDF8] font-bold scale-105'
                     : 'text-textMuted dark:text-[#8E98A8] hover:text-dark dark:hover:text-white'
                 }`
               }
             >
-              <item.icon size={20} className="shrink-0" />
-              <span className="text-[10px] mt-0.5">{item.label}</span>
+              <item.icon size={20} />
+              <span className="text-[10px] mt-0.5 tracking-tight">{item.label}</span>
             </NavLink>
           ))}
         </nav>
@@ -355,14 +316,6 @@ export const AppShell = () => {
         initialTab={legalModalTab || 'terms'}
         onClose={() => setLegalModalTab(null)}
       />
-
-      {showUpdateModal && updateInfo && (
-        <UpdateModal
-          isOpen={true}
-          updateInfo={updateInfo}
-          onClose={() => setShowUpdateModal(false)}
-        />
-      )}
 
       {showLegalGate && (
         <LegalModal
@@ -375,6 +328,12 @@ export const AppShell = () => {
           }}
         />
       )}
+
+      <UpdateModal
+        isOpen={showUpdateModal}
+        updateInfo={updateInfo}
+        onClose={() => setShowUpdateModal(false)}
+      />
     </div>
   );
 };

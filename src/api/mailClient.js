@@ -17,6 +17,44 @@ const getBaseUrl = () => {
   return '/owa-proxy';
 };
 
+
+function gmRequest(options) {
+  return new Promise((resolve, reject) => {
+    const fn = (typeof GM_xmlhttpRequest !== "undefined")
+      ? GM_xmlhttpRequest
+      : (typeof GM !== "undefined" && GM?.xmlHttpRequest)
+        ? GM.xmlHttpRequest.bind(GM)
+        : null;
+
+    if (!fn) {
+      return reject(new Error("Userscript GM_xmlhttpRequest is not available"));
+    }
+
+    fn({
+      timeout: options.timeout || 30000,
+      ...options,
+      onload: (res) => resolve(res),
+      onerror: (err) => reject(new Error(err?.error || err?.statusText || "GM_xmlhttpRequest failed")),
+      ontimeout: () => reject(new Error("GM_xmlhttpRequest timeout"))
+    });
+  });
+}
+
+function parseHeadersString(headerStr) {
+  const headers = {};
+  if (!headerStr || typeof headerStr !== "string") return headers;
+  const lines = headerStr.trim().split(/\r?\n/);
+  for (const line of lines) {
+    const idx = line.indexOf(":");
+    if (idx > 0) {
+      const key = line.slice(0, idx).trim().toLowerCase();
+      const val = line.slice(idx + 1).trim();
+      headers[key] = val;
+    }
+  }
+  return headers;
+}
+
 function base64ToBlob(base64, mimeType = 'application/octet-stream') {
   try {
     const cleanBase64 = base64.replace(/\s/g, '');
@@ -121,6 +159,24 @@ class MailClient {
         }
       } catch (capErr) {
         console.warn('[MailClient] Android native download failed, trying EWS fallback:', capErr.message);
+      }
+    }
+
+    // 2.5 Userscript mode: direct GET with Blob response via GM_xmlhttpRequest
+    if (isUserscript) {
+      try {
+        const gmRes = await gmRequest({
+          method: "GET",
+          url: fullUrl,
+          headers: reqHeaders,
+          responseType: "blob"
+        });
+        if (gmRes.status >= 200 && gmRes.status < 400 && gmRes.response) {
+          this._triggerBlobDownload(gmRes.response, fileName);
+          return { success: true, fileName };
+        }
+      } catch (gmErr) {
+        console.warn("[MailClient] Userscript direct download failed, trying EWS fallback:", gmErr.message);
       }
     }
 
@@ -326,6 +382,43 @@ class MailClient {
         ok: res.status >= 200 && res.status < 400,
         headers: res.headers || {},
         data: res.data
+      };
+    }
+
+    // 2.5 Userscript mode: GM_xmlhttpRequest
+    if (isUserscript) {
+      const gmRes = await gmRequest({
+        method,
+        url: fullUrl,
+        headers: reqHeaders,
+        data: body
+      });
+
+      const headersObj = parseHeadersString(gmRes.responseHeaders);
+      const cookiesToParse = headersObj["set-cookie"];
+      if (cookiesToParse) {
+        this.parseAndStoreCookies(cookiesToParse);
+      }
+      if (headersObj["x-owa-canary"]) {
+        this.canary = headersObj["x-owa-canary"];
+        this.sessionCookies["X-OWA-CANARY"] = this.canary;
+        this.saveSession();
+      }
+
+      let data = gmRes.responseText || "";
+      const contentType = headersObj["content-type"] || "";
+      if (contentType.includes("application/json")) {
+        try {
+          data = JSON.parse(gmRes.responseText);
+        } catch (_) {}
+      }
+
+      return {
+        status: gmRes.status,
+        statusText: gmRes.statusText,
+        ok: gmRes.status >= 200 && gmRes.status < 400,
+        headers: headersObj,
+        data
       };
     }
 
@@ -580,6 +673,39 @@ class MailClient {
         data: capRes.data
       };
     }
+    // 2.5 Userscript mode: use GM_xmlhttpRequest
+    else if (isUserscript) {
+      const gmRes = await gmRequest({
+        method: "POST",
+        url: fullUrl,
+        headers,
+        data: JSON.stringify(payload)
+      });
+      const headersObj = parseHeadersString(gmRes.responseHeaders);
+      const cookiesToParse = headersObj["set-cookie"];
+      if (cookiesToParse) {
+        this.parseAndStoreCookies(cookiesToParse);
+      }
+      if (headersObj["x-owa-canary"]) {
+        this.canary = headersObj["x-owa-canary"];
+        this.sessionCookies["X-OWA-CANARY"] = this.canary;
+        this.saveSession();
+      }
+      let data = null;
+      try {
+        data = JSON.parse(gmRes.responseText);
+      } catch (_) {
+        data = gmRes.responseText;
+      }
+      res = {
+        status: gmRes.status,
+        statusText: gmRes.statusText,
+        ok: gmRes.status >= 200 && gmRes.status < 400,
+        headers: headersObj,
+        data
+      };
+    }
+
     // 3. Web Dev Proxy mode
     else {
       const fetchHeaders = new Headers(headers);

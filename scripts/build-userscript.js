@@ -34,7 +34,7 @@ const version = pkg.version || '1.0.0';
 
 const header = `// ==UserScript==
 // @name         DarkMSAL
-// @namespace    https://github.com/Dewerro67/MSALKA
+// @namespace    https://github.com/manlitodubonzj75-cloud/DarkLK
 // @version      ${version}
 // @description  Тёмный современный интерфейс для личного кабинета студента МГЮА (lk.msal.ru)
 // @author       DarkMSAL Team
@@ -54,9 +54,9 @@ const header = `// ==UserScript==
 // @grant        GM.xmlHttpRequest
 // @connect      mail.msal.ru
 // @connect      lk.msal.ru
-// @updateURL    https://raw.githubusercontent.com/Dewerro67/MSALKA/main/release/darkmsal.user.js
-// @downloadURL  https://raw.githubusercontent.com/Dewerro67/MSALKA/main/release/darkmsal.user.js
-// @icon         https://raw.githubusercontent.com/Dewerro67/MSALKA/main/public/logo.png
+// @updateURL    https://raw.githubusercontent.com/manlitodubonzj75-cloud/DarkLK/main/release/darkmsal.user.js
+// @downloadURL  https://raw.githubusercontent.com/manlitodubonzj75-cloud/DarkLK/main/release/darkmsal.user.js
+// @icon         https://raw.githubusercontent.com/manlitodubonzj75-cloud/DarkLK/main/public/logo.png
 // ==/UserScript==
 `;
 

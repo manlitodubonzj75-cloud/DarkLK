@@ -1,273 +1,424 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import * as Icons from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { useDashboardData } from '../../context/SyncContext';
-import { formatLessonTime } from '../../api';
-import { Card } from '../../components/common/Card';
-import { Badge } from '../../components/common/Badge';
-import { Icons } from '../../components/common/Icons';
-import { LoadingSpinner } from '../../components/common/LoadingSpinner';
+import { lkService, formatISODate, formatLessonTime, getMondayOfWeek } from '../../api';
+import { cacheService } from '../../api';
+
+function extractTodayLessons(weekData, todayISO) {
+  if (!Array.isArray(weekData) || weekData.length === 0) return null;
+  const todayItem = weekData.find(day => {
+    const title = day.title || day.date;
+    if (!title) return false;
+    return title === todayISO || title.startsWith(todayISO);
+  });
+  return (todayItem && Array.isArray(todayItem.data)) ? todayItem.data : [];
+}
 
 export const DashboardPage = () => {
   const { user, isCollege } = useAuth();
   const navigate = useNavigate();
 
-  // Clean Domain Hook: single source of truth for dashboard data
-  const {
-    todayLessons,
-    hasLoadedLessons,
-    rating,
-    passes,
-    missedLessons,
-    news,
-    loading: isDataLoading
-  } = useDashboardData();
+  const now = new Date();
+  const todayISO = formatISODate(now);
+  const monday = getMondayOfWeek(now);
+  const mondayISO = formatISODate(monday);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  const sundayISO = formatISODate(sunday);
+  const scheduleCacheKey = `schedule_${mondayISO}_${sundayISO}`;
+
+  // 1. Synchronous Instant State Initialization from Encrypted Cache
+  const [scheduleToday, setScheduleToday] = useState(() => {
+    const cachedWeek = cacheService.get(scheduleCacheKey);
+    const lessons = extractTodayLessons(cachedWeek, todayISO);
+    return lessons !== null ? lessons : [];
+  });
+
+  const [isScheduleLoading, setIsScheduleLoading] = useState(() => {
+    const cachedWeek = cacheService.get(scheduleCacheKey);
+    return !Array.isArray(cachedWeek) || cachedWeek.length === 0;
+  });
+
+  const [stats, setStats] = useState(() => {
+    const cachedStudentInfo = cacheService.get('student_info');
+    const cachedProgress = cacheService.get('progress_with_lessons_latest');
+    let ratingVal = cachedStudentInfo?.reting ?? cachedStudentInfo?.rating ?? cachedProgress?.studentInfo?.reting ?? cachedProgress?.rating;
+    if ((ratingVal === undefined || ratingVal === null || ratingVal === '—') && cachedProgress?.gpa && cachedProgress.gpa !== '—') {
+      ratingVal = cachedProgress.gpa;
+    }
+    if (!ratingVal) ratingVal = '—';
+    const passesVal = cachedProgress?.passes ?? cachedStudentInfo?.passes ?? 0;
+    const missedLessons = Array.isArray(cachedProgress?.missedLessons) ? cachedProgress.missedLessons : [];
+
+    return {
+      rating: ratingVal,
+      passes: passesVal,
+      missedLessons,
+      loading: !cachedStudentInfo && !cachedProgress
+    };
+  });
 
   const [showMissedModal, setShowMissedModal] = useState(false);
 
-  const ALL_QUICK_ACTIONS = [
-    { label: 'Расписание', icon: Icons.Calendar, path: '/schedule', color: 'bg-primary' },
-    { label: 'Оценки', icon: Icons.GraduationCap, path: '/grades', color: 'bg-secondary' },
-    { label: 'Зачётка', icon: Icons.BookOpen, path: '/recordbook', color: 'bg-teal-700' },
-    { label: 'Почта', icon: Icons.Mail, path: '/mail', color: 'bg-[#036495]' },
-    { label: 'Отработки', icon: Icons.UserCheck, path: '/consultations', color: 'bg-accent' }
-  ];
+  // 2. Fetch fresh data in background (decoupled for instant schedule render)
+  useEffect(() => {
+    let isMounted = true;
+
+    async function fetchSchedule(forceRefresh = false) {
+      try {
+        const weekSchedule = await lkService.getScheduleWeek(monday, { forceRefresh, ttl: 300000 });
+        if (!isMounted) return;
+        const lessons = extractTodayLessons(weekSchedule, todayISO);
+        if (lessons !== null) {
+          setScheduleToday(lessons);
+        }
+      } catch (err) {
+        console.warn('[Dashboard] Schedule load warning:', err.message);
+        if (!isMounted) return;
+        const cachedWeek = cacheService.get(scheduleCacheKey);
+        const lessons = extractTodayLessons(cachedWeek, todayISO);
+        if (lessons !== null) {
+          setScheduleToday(lessons);
+        }
+      } finally {
+        if (isMounted) setIsScheduleLoading(false);
+      }
+    }
+
+    async function fetchOtherData(forceRefresh = false) {
+      const fetchOpts = { forceRefresh, ttl: 300000 };
+      try {
+        const [progressInfo, studentInfoResp] = await Promise.allSettled([
+          lkService.getProgressWithLessons(user, fetchOpts),
+          !isCollege ? lkService.getStudentInfo(fetchOpts) : Promise.resolve({})
+        ]);
+
+        if (!isMounted) return;
+
+        // Process rating/GPA and absences
+        const studentInfo = studentInfoResp.status === 'fulfilled' ? studentInfoResp.value : null;
+        const progressVal = progressInfo.status === 'fulfilled' ? progressInfo.value : null;
+        let ratingVal = studentInfo?.reting ?? studentInfo?.rating ?? progressVal?.studentInfo?.reting ?? progressVal?.rating;
+        if ((ratingVal === undefined || ratingVal === null || ratingVal === '—') && progressVal?.gpa && progressVal.gpa !== '—') {
+          ratingVal = progressVal.gpa;
+        }
+        if (!ratingVal) ratingVal = '—';
+        const passesVal = progressVal?.passes ?? studentInfo?.passes ?? 0;
+        const missedLessons = Array.isArray(progressVal?.missedLessons) ? progressVal.missedLessons : [];
+
+        setStats(prev => ({
+          rating: ratingVal || prev.rating || '—',
+          passes: passesVal ?? prev.passes ?? 0,
+          missedLessons: missedLessons.length > 0 ? missedLessons : (prev.missedLessons || []),
+          loading: false
+        }));
+      } catch (err) {
+        console.warn('Dashboard secondary data warning:', err);
+      }
+    }
+
+    function loadDashboardData(forceRefresh = false) {
+      fetchSchedule(forceRefresh);
+      fetchOtherData(forceRefresh);
+    }
+
+    loadDashboardData(false);
+
+    const handlePull = () => {
+      loadDashboardData(true);
+    };
+
+    window.addEventListener('app-pull-to-refresh', handlePull);
+
+    return () => {
+      isMounted = false;
+      window.removeEventListener('app-pull-to-refresh', handlePull);
+    };
+  }, [user, isCollege, monday, scheduleCacheKey, todayISO]);
 
   const QUICK_ACTIONS = isCollege
-    ? ALL_QUICK_ACTIONS.filter(action => action.path !== '/consultations')
-    : ALL_QUICK_ACTIONS;
+    ? [
+        { title: 'Расписание', icon: Icons.Calendar, path: '/schedule', color: 'text-primary dark:text-[#4E80EE] bg-primary/10 dark:bg-[#4E80EE]/10' },
+        { title: 'Успеваемость', icon: Icons.Award, path: '/grades', color: 'text-secondary dark:text-emerald-400 bg-secondary/10 dark:bg-emerald-400/10' },
+        { title: 'Зачётка', icon: Icons.BookOpen, path: '/recordbook', color: 'text-accent dark:text-cyan-400 bg-accent/10 dark:bg-cyan-400/10' },
+        { title: 'Группа', icon: Icons.Users, path: '/groupmates', color: 'text-violet-500 dark:text-violet-400 bg-violet-500/10 dark:bg-violet-400/10' }
+      ]
+    : [
+        { title: 'Расписание', icon: Icons.Calendar, path: '/schedule', color: 'text-primary dark:text-[#4E80EE] bg-primary/10 dark:bg-[#4E80EE]/10' },
+        { title: 'Успеваемость', icon: Icons.Award, path: '/grades', color: 'text-secondary dark:text-emerald-400 bg-secondary/10 dark:bg-emerald-400/10' },
+        { title: 'Зачётка', icon: Icons.BookOpen, path: '/recordbook', color: 'text-accent dark:text-cyan-400 bg-accent/10 dark:bg-cyan-400/10' },
+        { title: 'Консультации', icon: Icons.HelpCircle, path: '/consultations', color: 'text-amber-500 dark:text-amber-400 bg-amber-500/10 dark:bg-amber-400/10' },
+        { title: 'Группа', icon: Icons.Users, path: '/groupmates', color: 'text-violet-500 dark:text-violet-400 bg-violet-500/10 dark:bg-violet-400/10' }
+      ];
+
+  const handleOpenLink = (url) => {
+    try {
+      if (window.Capacitor?.isNativePlatform?.()) {
+        window.open(url, '_system');
+      } else {
+        window.open(url, '_blank', 'noopener,noreferrer');
+      }
+    } catch (_) {
+      window.location.href = url;
+    }
+  };
 
   return (
-    <div className="space-y-6 pb-6">
-      {/* Greeting Header */}
-      <div className="flex items-center justify-between">
+    <div className="space-y-6">
+      {/* Student Welcome Banner */}
+      <div className="bg-gradient-to-r from-primary to-accent dark:from-[#1E6685] dark:to-[#0F2A38] rounded-2xl p-6 text-white shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-textMuted dark:text-[#8E98A8]">
-            {new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}
-          </p>
-          <h1 className="text-2xl font-black text-dark dark:text-white mt-0.5">
-            Привет, {user?.name ? (user.name.split(' ')[1] || user.name.split(' ')[0]) : 'Студент'} 👋
+          <span className="text-xs font-semibold px-2.5 py-1 bg-white/20 rounded-full inline-block mb-2">
+            {isCollege ? 'Колледж МГЮА' : 'Студент МГЮА'}
+          </span>
+          <h1 className="text-xl sm:text-2xl font-bold">
+            {user?.name || 'Студент'}
           </h1>
-          <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-1">
-            {user?.department || user?.faculty || (isCollege ? 'Колледж МГЮА им. О.Е. Кутафина' : 'МГЮА им. О.Е. Кутафина')} • {user?.group ? `Группа ${user.group}` : (user?.speciality || user?.role || '')}
+          <p className="text-sm text-white/80 mt-1">
+            {user?.group ? `Группа ${user.group}` : 'Информация об учебной группе'}
+          </p>
+        </div>
+        <div className="text-left sm:text-right border-t sm:border-t-0 border-white/20 pt-3 sm:pt-0">
+          <p className="text-xs text-white/80">Сегодня</p>
+          <p className="text-sm font-semibold capitalize">
+            {now.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}
           </p>
         </div>
       </div>
 
-      {/* Quick Action Navigation */}
-      <div>
-        <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted dark:text-[#8E98A8] mb-3">
+      {/* Metrics Row */}
+      <section aria-label="Учебная сводка">
+        <div className={`grid ${isCollege ? 'grid-cols-3' : 'grid-cols-4'} gap-3`}>
+          <div className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between">
+            <span className="text-xs text-textMuted dark:text-[#8E98A8]">Курс</span>
+            <span className="text-2xl font-bold text-text dark:text-[#F1F5F9] mt-1">
+              {user?.course || '1'}
+            </span>
+          </div>
+          {!isCollege && (
+            <div className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between">
+              <span className="text-xs text-textMuted dark:text-[#8E98A8]">Семестр</span>
+              <span className="text-2xl font-bold text-text dark:text-[#F1F5F9] mt-1">
+                {user?.semester || '1'}
+              </span>
+            </div>
+          )}
+          <div className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between">
+            <div className="flex items-center justify-between text-secondary dark:text-emerald-400">
+              <span className="text-xs text-textMuted dark:text-[#8E98A8]">
+                {isCollege ? 'Средний балл' : 'Рейтинг'}
+              </span>
+              {isCollege ? <Icons.GraduationCap size={16} /> : <Icons.Award size={16} />}
+            </div>
+            <span className="text-2xl font-bold text-text dark:text-[#F1F5F9] mt-1">
+              {stats.loading ? '—' : stats.rating}
+            </span>
+          </div>
+          <div
+            onClick={isCollege ? () => setShowMissedModal(true) : undefined}
+            role={isCollege ? 'button' : undefined}
+            tabIndex={isCollege ? 0 : undefined}
+            onKeyDown={isCollege ? (e) => (e.key === 'Enter' || e.key === ' ') && setShowMissedModal(true) : undefined}
+            className={`bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col justify-between ${
+              isCollege
+                ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-[#232D3F] transition-colors focus:outline-none focus:ring-2 focus:ring-primary dark:focus:ring-[#4E80EE]'
+                : ''
+            }`}
+          >
+            <div className="flex items-center justify-between text-rose-500">
+              <span className="text-xs text-textMuted dark:text-[#8E98A8]">
+                {isCollege ? 'Пропуски' : 'Пропуски (ч)'}
+              </span>
+              <Icons.Clock size={16} />
+            </div>
+            <div className="flex items-baseline justify-between mt-1">
+              <span className="text-2xl font-bold text-text dark:text-[#F1F5F9]">
+                {stats.loading ? '—' : stats.passes}
+              </span>
+              {isCollege && (
+                <span className="text-[10px] text-primary dark:text-[#4E80EE] font-medium ml-1">
+                  детали →
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Quick Navigation Actions */}
+      <section aria-label="Быстрый доступ">
+        <h2 className="text-sm font-semibold text-textMuted dark:text-[#8E98A8] uppercase tracking-wider mb-3">
           Быстрый доступ
-        </h3>
-        <div className="grid grid-cols-4 sm:grid-cols-5 gap-3">
+        </h2>
+        <div className={`grid grid-cols-2 ${isCollege ? 'sm:grid-cols-4' : 'sm:grid-cols-5'} gap-3`}>
           {QUICK_ACTIONS.map(action => {
             const Icon = action.icon;
             return (
               <button
                 key={action.path}
                 onClick={() => navigate(action.path)}
-                className="flex flex-col items-center justify-center p-3 rounded-2xl bg-card dark:bg-[#1F2430] border border-border dark:border-[#2B3242] hover:border-accent dark:hover:border-[#38BDF8] hover:shadow-sm transition-all text-center group cursor-pointer"
+                className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 hover:bg-slate-50 dark:hover:bg-[#232D3F] transition-all flex flex-col items-center justify-center text-center group active:scale-[0.98]"
               >
-                <div className={`w-10 h-10 rounded-xl ${action.color} text-white flex items-center justify-center mb-2 shadow-sm group-hover:scale-105 transition-transform`}>
-                  <Icon size={20} />
+                <div className={`p-3 rounded-xl mb-2 group-hover:scale-110 transition-transform ${action.color}`}>
+                  <Icon size={22} />
                 </div>
-                <span className="text-xs font-bold text-dark dark:text-white">{action.label}</span>
+                <span className="text-xs font-semibold text-text dark:text-[#F1F5F9] truncate w-full">
+                  {action.title}
+                </span>
               </button>
             );
           })}
         </div>
-      </div>
+      </section>
 
-      {/* Academic Highlights: Student Rating & Passes */}
-      <div className="grid grid-cols-2 gap-3 sm:gap-4">
-        <Card className="p-3.5 sm:p-4 flex items-center space-x-3 border border-border dark:border-[#2B3242]">
-          <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary dark:text-[#38BDF8] flex items-center justify-center shrink-0">
-            <Icons.Award size={22} />
+      {/* Today Schedule Section */}
+      <section aria-label="Расписание на сегодня">
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-textMuted dark:text-[#8E98A8] uppercase tracking-wider">
+              Расписание на сегодня
+            </h2>
+            <button
+              onClick={() => navigate('/schedule')}
+              className="text-xs font-semibold text-primary dark:text-[#4E80EE] hover:underline"
+            >
+              Всё расписание →
+            </button>
           </div>
-          <div className="min-w-0">
-            <p className="text-xs text-textMuted dark:text-[#8E98A8] font-medium truncate">Рейтинг</p>
-            <h4 className="text-lg sm:text-xl font-black text-dark dark:text-white mt-0.5 truncate">
-              {isDataLoading ? '—' : (rating !== '—' && rating !== undefined && rating !== null ? rating : '—')}
-            </h4>
-          </div>
-        </Card>
 
-        <Card
-          onClick={() => {
-            if (missedLessons.length > 0) setShowMissedModal(true);
-          }}
-          className={`p-3.5 sm:p-4 flex items-center justify-between border border-border dark:border-[#2B3242] ${
-            missedLessons.length > 0 ? 'cursor-pointer hover:border-accent dark:hover:border-[#38BDF8] transition-colors' : ''
-          }`}
-          title={missedLessons.length > 0 ? "Нажмите для просмотра пропущенных занятий" : undefined}
-        >
-          <div className="flex items-center space-x-3 min-w-0">
-            <div className="w-10 h-10 rounded-xl bg-accent/10 text-accent dark:text-[#38BDF8] flex items-center justify-center shrink-0">
-              <Icons.Clock size={22} />
+          {isScheduleLoading ? (
+            <div className="bg-surface dark:bg-[#1C2433] p-8 rounded-xl border border-border/40 dark:border-[#283245]/60 flex flex-col items-center justify-center text-center">
+              <Icons.Loader2 size={24} className="animate-spin text-primary dark:text-[#4E80EE] mb-2" />
+              <p className="text-xs text-textMuted dark:text-[#8E98A8]">Загрузка расписания...</p>
             </div>
-            <div className="min-w-0">
-              <p className="text-xs text-textMuted dark:text-[#8E98A8] font-medium truncate">Пропуски (акад. ч)</p>
-              <h4 className="text-lg sm:text-xl font-black text-dark dark:text-white mt-0.5 truncate">
-                {isDataLoading ? '—' : passes}
-              </h4>
+          ) : scheduleToday.length === 0 ? (
+            <div className="bg-surface dark:bg-[#1C2433] p-8 rounded-xl border border-border/40 dark:border-[#283245]/60 text-center">
+              <Icons.Smile size={32} className="mx-auto text-textMuted dark:text-[#8E98A8] mb-2 opacity-60" />
+              <h3 className="font-semibold text-text dark:text-[#F1F5F9] text-sm">Пар нет</h3>
+              <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-0.5">Сегодня учебных занятий не запланировано</p>
             </div>
-          </div>
-          {missedLessons.length > 0 && (
-            <span className="text-xs font-bold text-accent dark:text-[#38BDF8] hover:underline shrink-0 ml-2">
-              Детали →
-            </span>
+          ) : (
+            <div className="space-y-2.5">
+              {scheduleToday.map((lesson, idx) => {
+                const timeStr = lesson.time || formatLessonTime(lesson.num);
+                return (
+                  <div
+                    key={idx}
+                    className="bg-surface dark:bg-[#1C2433] p-4 rounded-xl border border-border/40 dark:border-[#283245]/60 flex items-start gap-3.5 hover:bg-slate-50 dark:hover:bg-[#232D3F] transition-colors"
+                  >
+                    <div className="flex flex-col items-center justify-center px-2 py-1 bg-primary/10 dark:bg-[#4E80EE]/10 rounded-lg text-primary dark:text-[#4E80EE] font-semibold text-xs shrink-0 min-w-[58px]">
+                      <span>{timeStr.split('-')[0] || timeStr}</span>
+                      <span className="text-[10px] opacity-75">{timeStr.split('-')[1] || ''}</span>
+                    </div>
+
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <h4 className="font-semibold text-text dark:text-[#F1F5F9] text-sm truncate">
+                          {lesson.name || lesson.discipline || 'Учебное занятие'}
+                        </h4>
+                        {lesson.room && (
+                          <span className="text-xs font-medium px-2 py-0.5 bg-bg dark:bg-[#12151B] border border-border/40 dark:border-[#283245]/60 rounded-md text-textMuted dark:text-[#8E98A8] shrink-0">
+                            ауд. {lesson.room}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3 mt-1 text-xs text-textMuted dark:text-[#8E98A8]">
+                        {lesson.type && <span>{lesson.type}</span>}
+                        {lesson.teacher && <span className="truncate">• {lesson.teacher}</span>}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           )}
-        </Card>
-      </div>
+        </div>
 
-      {/* Missed Lessons Modal */}
-      {showMissedModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
-          onClick={() => setShowMissedModal(false)}
-        >
+        {/* Modal for College Missed Lessons */}
+        {isCollege && showMissedModal && (
           <div
-            className="bg-card dark:bg-[#1F2430] border border-border dark:border-[#2B3242] rounded-3xl max-w-lg w-full max-h-[80vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200"
-            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+            onTouchStart={(e) => e.stopPropagation()}
+            onTouchMove={(e) => e.stopPropagation()}
+            onTouchEnd={(e) => e.stopPropagation()}
           >
-            <div className="p-5 border-b border-border dark:border-[#2B3242] flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <div className="w-8 h-8 rounded-xl bg-amber-500/10 text-amber-500 flex items-center justify-center">
-                  <Icons.AlertCircle size={18} />
+            <div className="bg-surface dark:bg-[#1C2433] rounded-2xl border border-border/60 dark:border-[#283245] w-full max-w-lg max-h-[80vh] flex flex-col shadow-2xl overflow-hidden">
+              <div className="p-4 border-b border-border/40 dark:border-[#283245] flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <div className="p-1.5 rounded-lg bg-rose-500/10 text-rose-500">
+                    <Icons.AlertTriangle size={18} />
+                  </div>
+                  <h3 className="font-bold text-text dark:text-[#F1F5F9] text-base">Пропущенные занятия</h3>
                 </div>
-                <div>
-                  <h3 className="font-bold text-base text-dark dark:text-white">Пропущенные занятия</h3>
-                  <p className="text-xs text-textMuted dark:text-[#8E98A8]">Всего пропущено: {passes} ч.</p>
-                </div>
+                <button
+                  onClick={() => setShowMissedModal(false)}
+                  className="p-1.5 rounded-lg text-textMuted hover:text-text hover:bg-bg dark:hover:bg-[#12151B] transition-colors"
+                >
+                  <Icons.X size={18} />
+                </button>
               </div>
-              <button
-                onClick={() => setShowMissedModal(false)}
-                className="p-1.5 rounded-xl text-textMuted hover:text-dark dark:hover:text-white hover:bg-bg dark:hover:bg-[#262D3D] transition-colors"
-              >
-                <Icons.X size={18} />
-              </button>
-            </div>
-            <div className="p-5 overflow-y-auto space-y-3 flex-1">
-              {missedLessons.map((l, i) => (
-                <div key={i} className="p-3.5 rounded-2xl bg-bg dark:bg-[#12151B] border border-border/50 dark:border-[#2B3242]/50 flex items-start space-x-3">
-                  <div className="w-7 h-7 rounded-lg bg-rose-500/10 text-rose-500 flex items-center justify-center shrink-0 mt-0.5 font-bold text-xs">
-                    Н
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="font-semibold text-xs sm:text-sm text-dark dark:text-white">{l.discipline || l.name || l.title}</p>
-                    <p className="text-[11px] text-textMuted dark:text-[#8E98A8] mt-0.5">
-                      {l.date} • {l.theme || l.type || 'Занятие'}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
 
-      {/* Today's Classes */}
-      <div>
-        <div className="flex justify-between items-center mb-3">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted dark:text-[#8E98A8]">
-            Расписание на сегодня
-          </h3>
-          <button
-            onClick={() => navigate('/schedule')}
-            className="text-xs font-bold text-secondary dark:text-[#38BDF8] hover:underline"
-          >
-            Все занятия →
-          </button>
-        </div>
-
-        {!hasLoadedLessons && isDataLoading ? (
-          <Card className="p-8 text-center border border-border dark:border-[#2B3242]">
-            <LoadingSpinner size={8} text="Загрузка занятий..." />
-          </Card>
-        ) : todayLessons.length === 0 ? (
-          <Card className="p-8 text-center border border-border dark:border-[#2B3242]">
-            <div className="w-12 h-12 rounded-full bg-accent/10 mx-auto flex items-center justify-center text-accent dark:text-[#38BDF8] mb-3">
-              <Icons.Calendar size={24} />
-            </div>
-            <h4 className="text-base font-bold text-dark dark:text-white">Сегодня занятий нет</h4>
-            <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-1">Отличный день для подготовки или отдыха!</p>
-          </Card>
-        ) : (
-          <div className="space-y-3">
-            {todayLessons.map((lesson, idx) => {
-              const teacherName = lesson.teacher || lesson.lecturer || lesson.tutor;
-              const room = lesson.classroom || lesson.auditory || lesson.room;
-
-              return (
-                <Card key={lesson.id || idx} className="p-4 sm:p-5 hover:border-accent dark:hover:border-[#38BDF8] transition-colors overflow-hidden w-full min-w-0 border border-border dark:border-[#2B3242]">
-                  {/* Header: Time badge on left, Lesson Type & Corps on right */}
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2 w-full min-w-0">
-                    <div className="px-2.5 py-1 rounded-lg bg-primary/10 text-primary dark:text-[#38BDF8] font-bold text-xs sm:text-sm shrink-0">
-                      {formatLessonTime(lesson)}
-                    </div>
-                    <div className="flex flex-wrap items-center justify-end gap-1.5 min-w-0 max-w-[60%] sm:max-w-none">
-                      {lesson.type && (
-                        <Badge 
-                          type={lesson.isConsultation ? 'secondary' : 'primary'}
-                          className="max-w-[180px] sm:max-w-[280px] truncate text-[11px] font-semibold"
-                          title={lesson.type}
-                        >
-                          {lesson.type}
-                        </Badge>
-                      )}
-                      {lesson.corps && (
-                        <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-bg dark:bg-[#12151B] text-textMuted dark:text-[#8E98A8] border border-border dark:border-[#2B3242] shrink-0">
-                          {lesson.corps}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Body: Full-width discipline title */}
-                  <h4 className="text-base sm:text-lg font-bold text-dark dark:text-white leading-snug break-words">
-                    {lesson.discipline || lesson.subject || lesson.title}
-                  </h4>
-
-                  {/* Footer: Auditory & Teacher */}
-                  {(room || teacherName) && (
-                    <div className="mt-3 pt-2.5 border-t border-border dark:border-[#2B3242] flex flex-wrap items-center justify-between gap-2 text-xs text-textMuted dark:text-[#8E98A8]">
-                      {room && (
-                        <span className="font-semibold text-dark dark:text-white">
-                          Аудитория: {room}
-                        </span>
-                      )}
-                      {teacherName && (
-                        <div className="flex items-center space-x-1 text-secondary dark:text-[#38BDF8] font-medium">
-                          <Icons.User size={14} />
-                          <span>{teacherName}</span>
+              <div className="p-4 overflow-y-auto flex-1 space-y-2">
+                {stats.missedLessons && stats.missedLessons.length > 0 ? (
+                  stats.missedLessons.map((item, idx) => (
+                    <div
+                      key={idx}
+                      className="p-3 rounded-xl bg-bg dark:bg-[#12151B] border border-border/30 dark:border-[#283245]/40 flex items-start justify-between gap-3 text-xs"
+                    >
+                      <div>
+                        <div className="font-semibold text-text dark:text-[#F1F5F9]">
+                          {item.discipline || item.name || 'Занятие'}
                         </div>
-                      )}
+                        <div className="text-textMuted dark:text-[#8E98A8] mt-0.5">
+                          {item.date ? new Date(item.date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}
+                          {item.type ? ` • ${item.type}` : ''}
+                        </div>
+                      </div>
+                      <span className="px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-500 font-semibold shrink-0">
+                        {item.hours ? `${item.hours} ч` : '2 ч'}
+                      </span>
                     </div>
-                  )}
-                </Card>
-              );
-            })}
+                  ))
+                ) : (
+                  <div className="text-center py-8 text-textMuted dark:text-[#8E98A8]">
+                    <Icons.CheckCircle size={32} className="mx-auto text-secondary dark:text-emerald-400 mb-2 opacity-80" />
+                    <p className="text-xs">Детализированный список пропусков чист или ещё не загружен.</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="p-4 border-t border-border/40 dark:border-[#283245] bg-bg/50 dark:bg-[#12151B]/50 flex items-center justify-between">
+                <span className="text-xs text-textMuted dark:text-[#8E98A8]">Всего пропущено:</span>
+                <span className="text-sm font-bold text-rose-500">
+                  {stats.passes} {isCollege ? 'пар' : 'ч'}
+                </span>
+              </div>
+            </div>
           </div>
         )}
-      </div>
+      </section>
 
-      {/* University News Feed */}
-      {Array.isArray(news) && news.length > 0 && (
-        <div>
-          <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted dark:text-[#8E98A8] mb-3">
-            Новости университета
-          </h3>
-          <div className="space-y-3">
-            {news.map((item, idx) => (
-              <Card key={item.id || idx} className="p-4 border border-border dark:border-[#2B3242]">
-                <h4 className="text-sm font-bold text-dark dark:text-white">{item.title || item.name}</h4>
-                {item.date && <span className="text-[11px] text-textMuted dark:text-[#8E98A8]">{item.date}</span>}
-                {item.preview && <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-1 leading-relaxed">{item.preview}</p>}
-              </Card>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* Footer Support & Source Code Links */}
+      <footer aria-label="Ссылки и поддержка" className="pt-2 pb-6 flex items-center justify-center gap-3">
+        <button
+          onClick={() => handleOpenLink('https://t.me/DarkMSAL_supportbot')}
+          className="px-4 py-2.5 rounded-xl bg-surface dark:bg-[#1C2433] hover:bg-slate-100 dark:hover:bg-[#232D3F] border border-border/40 dark:border-[#283245]/60 text-xs font-semibold text-textMuted dark:text-[#8E98A8] hover:text-primary dark:hover:text-[#4E80EE] flex items-center space-x-2 transition-all active:scale-[0.98] shadow-sm"
+        >
+          <Icons.Send size={14} className="text-[#2AABEE]" />
+          <span>Поддержка</span>
+        </button>
+
+        <button
+          onClick={() => handleOpenLink('https://github.com/Dewerro67/MSALKA')}
+          className="px-4 py-2.5 rounded-xl bg-surface dark:bg-[#1C2433] hover:bg-slate-100 dark:hover:bg-[#232D3F] border border-border/40 dark:border-[#283245]/60 text-xs font-semibold text-textMuted dark:text-[#8E98A8] hover:text-dark dark:hover:text-white flex items-center space-x-2 transition-all active:scale-[0.98] shadow-sm"
+        >
+          <Icons.Code2 size={14} />
+          <span>Исходники</span>
+        </button>
+      </footer>
     </div>
   );
 };
