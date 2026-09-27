@@ -1,13 +1,21 @@
 /**
  * Update Service for DarkMSAL
- * Checks GitHub Releases (Dewerro67/MSALKA) for updates, compares semver versions,
- * identifies matching platform assets (.ipa for iOS, .apk for Android, .user.js for Userscript, etc.),
- * and handles downloading/installing updates on user devices.
+ *
+ * Источник обновлений — GitHub Releases репозитория.
+ *  - Windows / Linux (Electron): electron-updater в main-процессе, скачивание + проверка
+ *    подписи Ed25519 + установка с перезапуском (electron/updater.cjs).
+ *  - Android: манифест latest.json из релиза, APK качается и проверяется нативно
+ *    (AppUpdater.java), установку подтверждает пользователь в системном окне.
+ *  - Userscript: обновляет менеджер скриптов по @updateURL.
+ *  - iOS / macOS / web: уведомление + ручное скачивание.
  */
+import { CapacitorHttp } from '@capacitor/core';
 
 export const APP_VERSION = '1.1.0';
 const GITHUB_REPO = 'manlitodubonzj75-cloud/DarkLK';
 const API_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+const MANIFEST_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/latest.json`;
+const RELEASE_DOWNLOAD_BASE = `https://github.com/${GITHUB_REPO}/releases/download`;
 const LAST_CHECK_KEY = 'msal_last_update_check';
 const DISMISSED_VERSION_KEY = 'msal_dismissed_update_version';
 
@@ -99,17 +107,194 @@ export function findPlatformAsset(assets, platform) {
   }
 }
 
+function getElectronUpdates() {
+  return typeof window !== 'undefined' ? window.electronAPI?.updates || null : null;
+}
+
+function getAndroidUpdater() {
+  return typeof window !== 'undefined' && window.Capacitor?.getPlatform?.() === 'android'
+    ? window.AndroidUpdater || null
+    : null;
+}
+
+function isDismissed(version) {
+  try {
+    return localStorage.getItem(DISMISSED_VERSION_KEY) === String(version).replace(/^v/i, '');
+  } catch (_) {
+    return false;
+  }
+}
+
+async function fetchManifest() {
+  // Нативный HTTP: без CORS и без лимита GitHub API (60 запросов/час на IP — в сети вуза это мало)
+  const res = await CapacitorHttp.get({
+    url: `${MANIFEST_URL}?t=${Date.now()}`,
+    responseType: 'json',
+    connectTimeout: 15000,
+    readTimeout: 15000
+  });
+  if (res.status < 200 || res.status >= 300) {
+    const err = new Error(`Манифест обновления: HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+  if (!data?.version || !Array.isArray(data.files)) throw new Error('Некорректный манифест обновления');
+  return data;
+}
+
+function parseAndroidStatus(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    return { state: 'error', progress: 0, error: 'Нет ответа от установщика' };
+  }
+}
+
 export const updateService = {
   getAppVersion() {
     return APP_VERSION;
   },
 
   /**
-   * Check GitHub for updates
-   * @param {Object} options { force?: boolean }
-   * @returns {Promise<Object>} { hasUpdate, latestVersion, currentVersion, releaseNotes, asset, releaseUrl, ... }
+   * Проверка обновлений. Возвращает { hasUpdate, mode, latestVersion, currentVersion, releaseNotes, asset, ... }
+   * mode: 'electron' | 'android' | 'manual'
    */
   async checkForUpdates({ force = false } = {}) {
+    const electron = getElectronUpdates();
+    if (electron) {
+      try {
+        const st = await electron.check();
+        if (st?.status !== 'unsupported') {
+          if (st?.status === 'error') {
+            return { hasUpdate: false, currentVersion: APP_VERSION, error: st.error };
+          }
+          const hasUpdate = st?.status === 'available' || st?.status === 'ready' || st?.status === 'downloading' || st?.status === 'verifying';
+          if (hasUpdate && !force && isDismissed(st.version)) {
+            return { hasUpdate: false, latestVersion: st.version, currentVersion: APP_VERSION };
+          }
+          return {
+            hasUpdate,
+            mode: 'electron',
+            latestVersion: st?.version,
+            currentVersion: APP_VERSION,
+            releaseNotes: st?.notes || '',
+            releaseUrl: `https://github.com/${GITHUB_REPO}/releases/latest`,
+            platform: getAppPlatform()
+          };
+        }
+        // unsupported (macOS, dev-сборка, нет ключа) — ниже обычная проверка с ручным скачиванием
+      } catch (err) {
+        console.warn('[Update] Electron updater check failed:', err?.message);
+      }
+    }
+
+    const android = getAndroidUpdater();
+    if (android) {
+      try {
+        const manifest = await fetchManifest();
+        const currentVersion = android.getCurrentVersion?.() || APP_VERSION;
+        const apk = manifest.files.find((f) => /\.apk$/i.test(f.name));
+        const hasUpdate = Boolean(apk) && compareSemver(manifest.version, currentVersion) > 0;
+        if (hasUpdate && !force && isDismissed(manifest.version)) {
+          return { hasUpdate: false, latestVersion: manifest.version, currentVersion };
+        }
+        return {
+          hasUpdate,
+          mode: 'android',
+          latestVersion: manifest.version,
+          currentVersion,
+          releaseName: `DarkMSAL ${manifest.tag}`,
+          releaseNotes: manifest.notes || '',
+          releaseUrl: `https://github.com/${GITHUB_REPO}/releases/tag/${manifest.tag}`,
+          publishedAt: manifest.publishedAt,
+          asset: apk ? {
+            name: apk.name,
+            size: apk.size,
+            sha256: apk.sha256,
+            browser_download_url: `${RELEASE_DOWNLOAD_BASE}/${manifest.tag}/${encodeURIComponent(apk.name)}`
+          } : null,
+          platform: 'android'
+        };
+      } catch (err) {
+        // Старые релизы без latest.json — падаем на GitHub API
+        console.warn('[Update] Manifest check failed, falling back to GitHub API:', err?.message);
+      }
+    }
+
+    const res = await this._checkViaGitHubApi({ force });
+    return res ? { mode: 'manual', ...res } : res;
+  },
+
+  /**
+   * Установка. onProgress({ status, progress, error }) — для прогресс-бара в модалке.
+   * Возвращает промис; для electron/android резолвится, когда запущена установка.
+   */
+  async installUpdate(updateInfo, onProgress = () => {}) {
+    if (!updateInfo) return;
+
+    if (updateInfo.mode === 'electron' && getElectronUpdates()) {
+      const electron = getElectronUpdates();
+      const unsubscribe = electron.onState((st) => onProgress(st));
+      try {
+        let st = await electron.getState();
+        if (st.status !== 'ready') {
+          st = await electron.download();
+        }
+        onProgress(st);
+        if (st.status !== 'ready') {
+          throw new Error(st.error || 'Не удалось скачать обновление');
+        }
+        onProgress({ status: 'installing', progress: 100 });
+        const ok = await electron.install();
+        if (!ok) throw new Error('Установка отменена: обновление не прошло проверку');
+      } finally {
+        unsubscribe();
+      }
+      return;
+    }
+
+    if (updateInfo.mode === 'android' && getAndroidUpdater() && updateInfo.asset?.sha256) {
+      const android = getAndroidUpdater();
+      let st = parseAndroidStatus(android.getStatus());
+
+      if (st.state !== 'ready' && st.state !== 'need_permission') {
+        if (!android.start(updateInfo.asset.browser_download_url, updateInfo.asset.sha256)) {
+          st = parseAndroidStatus(android.getStatus());
+          throw new Error(st.error || 'Не удалось начать загрузку');
+        }
+        // Поллинг прогресса нативной загрузки
+        st = await new Promise((resolve) => {
+          const timer = setInterval(() => {
+            const cur = parseAndroidStatus(android.getStatus());
+            onProgress({ status: cur.state === 'downloading' ? 'downloading' : cur.state, progress: cur.progress, error: cur.error });
+            if (cur.state !== 'downloading') {
+              clearInterval(timer);
+              resolve(cur);
+            }
+          }, 400);
+        });
+      }
+
+      if (st.state === 'error') {
+        throw new Error(st.error || 'Ошибка загрузки обновления');
+      }
+
+      const started = android.install();
+      st = parseAndroidStatus(android.getStatus());
+      if (!started && st.state === 'need_permission') {
+        onProgress({ status: 'need_permission', progress: 100 });
+        return;
+      }
+      if (!started) throw new Error(st.error || 'Не удалось запустить установку');
+      onProgress({ status: 'installing', progress: 100 });
+      return;
+    }
+
+    this._manualInstall(updateInfo);
+  },
+
+  async _checkViaGitHubApi({ force = false } = {}) {
     const currentVersion = APP_VERSION;
     const platform = getAppPlatform();
 
@@ -220,9 +405,9 @@ export const updateService = {
   },
 
   /**
-   * Download / Install the update
+   * Ручное скачивание: открыть файл релиза в браузере
    */
-  installUpdate(updateInfo) {
+  _manualInstall(updateInfo) {
     if (!updateInfo) return;
 
     const { asset, releaseUrl, platform } = updateInfo;

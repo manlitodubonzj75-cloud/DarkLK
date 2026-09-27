@@ -15,7 +15,8 @@
     "package:fedora": "vite build && electron-builder --linux rpm --x64",
     "package:linux": "vite build && electron-builder --linux AppImage rpm deb --x64",
     "package:ipa": "vite build && npx cap sync ios && xcodebuild archive -workspace ios/App/App.xcworkspace -scheme App -configuration Release -destination 'generic/platform=iOS' -archivePath build/App.xcarchive CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=\"\" && mkdir -p release/Payload && cp -R build/App.xcarchive/Products/Applications/App.app release/Payload/ && (cd release && zip -qr -y DarkMSAL-1.0.ipa Payload && rm -rf Payload)",
-    "build:userscript": "node scripts/build-userscript.js"
+    "build:userscript": "node scripts/build-userscript.js",
+    "update-keys": "node scripts/update-keys.mjs"
   },
   "build": {
     "appId": "ru.msal.darkmsal",
@@ -26,7 +27,8 @@
     },
     "files": [
       "dist/**/*",
-      "electron/**/*"
+      "electron/**/*",
+      "!electron/**/*.md"
     ],
     "mac": {
       "target": [
@@ -55,7 +57,8 @@
       "window": {
         "width": 540,
         "height": 380
-      }
+      },
+      "artifactName": "DarkMSAL-${version}-${arch}.${ext}"
     },
     "win": {
       "target": [
@@ -66,7 +69,8 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "shortcutName": "DarkMSAL"
+      "shortcutName": "DarkMSAL",
+      "artifactName": "DarkMSAL-Setup-${version}.${ext}"
     },
     "linux": {
       "target": [
@@ -77,12 +81,24 @@
       "category": "Education",
       "icon": "build/icons",
       "maintainer": "DarkMSAL Team <dev@msal.ru>"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "manlitodubonzj75-cloud",
+        "repo": "DarkLK",
+        "releaseType": "release"
+      }
+    ],
+    "appImage": {
+      "artifactName": "DarkMSAL-${version}-${arch}.${ext}"
     }
   },
   "dependencies": {
     "@aparajita/capacitor-secure-storage": "^7.1.6",
     "@capacitor/core": "^7.0.1",
     "@capacitor/ios": "^7.6.9",
+    "electron-updater": "^6.8.9",
     "lucide-react": "^1.45.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

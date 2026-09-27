@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, shell, dialog, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { initUpdater } = require('./updater.cjs');
 
 let mainWindow;
 
@@ -237,6 +238,7 @@ ipcMain.handle('mail-download', async (event, { url, fileName, headers = {}, bas
 });
 
 app.whenReady().then(() => {
+  initUpdater(() => mainWindow, assertTrustedSender);
   createWindow();
 
   app.on('activate', () => {

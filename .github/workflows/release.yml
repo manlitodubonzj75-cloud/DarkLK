@@ -11,8 +11,28 @@ permissions:
   contents: read
 
 jobs:
+  check-version:
+    name: Check version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Tag must match package.json
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
+            echo "::error::Тег $GITHUB_REF_NAME не совпадает с версией в package.json (v$VERSION). Автообновление сравнивает именно их."
+            exit 1
+          fi
+          if [ ! -f electron/update-public-key.pem ]; then
+            echo "::error::Нет electron/update-public-key.pem — выполните npm run update-keys (см. README → «Автообновления»)."
+            exit 1
+          fi
+
   build-desktop:
     name: Build Desktop (${{ matrix.os }})
+    needs: check-version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -60,11 +80,16 @@ jobs:
             release/*.deb
             release/*.dmg
             release/*.exe
+            release/latest*.yml
+            release/*.blockmap
           if-no-files-found: ignore
 
   build-android:
     name: Build Android APK
+    needs: check-version
     runs-on: ubuntu-latest
+    # Ключ подписи APK доступен только в защищённом окружении (см. README)
+    environment: release
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -138,6 +163,7 @@ jobs:
 
   build-ios:
     name: Build iOS IPA
+    needs: check-version
     runs-on: macos-latest
     steps:
       - name: Checkout repository
@@ -174,6 +200,7 @@ jobs:
 
   build-userscript:
     name: Build Userscript
+    needs: check-version
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -201,22 +228,25 @@ jobs:
     name: Publish GitHub Release
     needs: [build-desktop, build-android, build-ios, build-userscript]
     runs-on: ubuntu-latest
+    # Ключ подписи обновлений доступен только в защищённом окружении (см. README)
+    environment: release
     permissions:
       contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
       - name: Download all built artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-
-      - name: Gather release binaries
-        run: |
-          mkdir -p final-release
-          find artifacts -type f \( -name "*.apk" -o -name "*.ipa" -o -name "*.rpm" -o -name "*.deb" -o -name "*.AppImage" -o -name "*.dmg" -o -name "*.exe" -o -name "*.user.js" \) -exec cp {} final-release/ \;
-          cd final-release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
 
       - name: Resolve tag
         id: tag
@@ -227,6 +257,32 @@ jobs:
             echo "tag=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Gather release files
+        run: |
+          mkdir -p final-release
+          find artifacts -type f \( -name "*.apk" -o -name "*.ipa" -o -name "*.rpm" -o -name "*.deb" -o -name "*.AppImage" -o -name "*.dmg" -o -name "*.exe" -o -name "*.user.js" -o -name "latest*.yml" -o -name "*.blockmap" \) -exec cp {} final-release/ \;
+          ls -lh final-release/
+
+      - name: Release notes
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          PREV=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+          if [ -n "$PREV" ]; then RANGE="$PREV..HEAD"; else RANGE="HEAD"; fi
+          git log --no-merges --pretty='- %s' $RANGE | head -40 > notes.txt
+          cat notes.txt
+
+      - name: Manifest, checksums and signature
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "::error::Нет секрета UPDATE_SIGNING_KEY в окружении release. Без подписи десктопные клиенты не примут обновление (см. README → «Автообновления»)."
+            exit 1
+          fi
+          node scripts/make-release-manifest.mjs final-release "${{ steps.tag.outputs.tag }}" notes.txt
+          (cd final-release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          node scripts/sign-release.mjs final-release/SHA256SUMS.txt
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -234,7 +290,7 @@ jobs:
           name: DarkMSAL ${{ steps.tag.outputs.tag }}
           draft: false
           prerelease: false
-          generate_release_notes: true
+          body_path: notes.txt
           files: final-release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

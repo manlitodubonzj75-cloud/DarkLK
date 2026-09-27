@@ -126,6 +126,24 @@ npm install
 | **iOS** (IPA) | `npm run package:ipa` | `release/DarkMSAL-1.0.ipa` |
 | **Web SPA** | `npm run build` | каталог `dist/` |
 
+### 🔄 Автообновления
+
+| Платформа | Как обновляется |
+|:---|:---|
+| Windows (.exe), Linux (AppImage / deb / rpm) | Сама: «Доступно обновление → Обновить и перезапустить». Перед установкой проверяется подпись Ed25519 релиза |
+| Android (.apk) | Сама качает APK, проверяет SHA-256 и ключ подписи, затем система спрашивает «Установить?» (один раз нужно разрешить установку из DarkMSAL) |
+| Userscript | Менеджер скриптов сам подтягивает новую версию из Releases |
+| iOS (.ipa), macOS (.dmg) | Уведомление + ручное скачивание (без подписи Apple автоустановка невозможна) |
+
+**Как выпустить обнову:** поднять `version` в `package.json` (и `versionCode` в `android/app/build.gradle`), закоммитить, поставить тег `vX.Y.Z` и запушить его. CI соберёт всё, подпишет и опубликует релиз.
+
+**Настройка один раз:**
+
+1. `npm run update-keys` — создаст `electron/update-public-key.pem` (закоммитить) и приватный ключ в домашней папке (**не** в репо).
+2. GitHub → Settings → Environments → **New environment** `release` → включить **Required reviewers** (себя) — без подтверждения релиз не соберётся, даже если кто-то получит доступ к репо.
+3. В окружение `release` добавить секреты: `UPDATE_SIGNING_KEY` (содержимое приватного ключа) и четыре секрета Android из раздела ниже.
+4. Обе копии ключей (ключ обновлений и keystore Android) сохранить в надёжном месте. Потеря = пользователям придётся переустанавливать приложение вручную.
+
 ### 🔑 Подпись Android
 
 Релизный APK подписывается одним постоянным ключом — иначе обновления не встают поверх, а пользователи привыкают ставить APK откуда попало. Ключ **никогда не коммитится**.
@@ -137,7 +155,7 @@ keytool -genkeypair -v -keystore darkmsal-release.keystore -alias darkmsal \
 base64 -w0 darkmsal-release.keystore   # -> секрет ANDROID_KEYSTORE_BASE64
 ```
 
-GitHub → Settings → Secrets and variables → Actions: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`.
+GitHub → Settings → Environments → `release` → секреты: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`.
 Локально — те же значения через переменные `DARKMSAL_KEYSTORE_FILE`, `DARKMSAL_KEYSTORE_PASSWORD`, `DARKMSAL_KEY_ALIAS`, `DARKMSAL_KEY_PASSWORD`.
 
 ---

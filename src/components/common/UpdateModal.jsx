@@ -1,14 +1,46 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Icons } from './Icons';
 import { updateService } from '../../api/updateService';
 
+const STATUS_TEXT = {
+  checking: 'Проверяем…',
+  downloading: 'Скачиваем обновление…',
+  verifying: 'Проверяем подпись…',
+  ready: 'Готово к установке',
+  installing: 'Запускаем установку…',
+  need_permission: 'Разрешите DarkMSAL устанавливать приложения (откроются настройки), вернитесь и нажмите «Установить» ещё раз'
+};
+
 export const UpdateModal = ({ isOpen, updateInfo, onClose }) => {
+  const [progress, setProgress] = useState(null); // { status, progress, error }
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setProgress(null);
+      setBusy(false);
+    }
+  }, [isOpen]);
+
   if (!isOpen || !updateInfo) return null;
 
-  const { latestVersion, currentVersion, releaseName, releaseNotes, asset, releaseUrl, platform } = updateInfo;
+  const { latestVersion, currentVersion, releaseName, releaseNotes, asset, releaseUrl, platform, mode } = updateInfo;
+  const isAuto = mode === 'electron' || mode === 'android';
 
-  const handleDownload = () => {
-    updateService.installUpdate(updateInfo);
+  const handleDownload = async () => {
+    if (!isAuto) {
+      updateService.installUpdate(updateInfo);
+      return;
+    }
+    setBusy(true);
+    setProgress({ status: 'downloading', progress: 0 });
+    try {
+      await updateService.installUpdate(updateInfo, (st) => setProgress((prev) => ({ ...prev, ...st })));
+    } catch (err) {
+      setProgress({ status: 'error', progress: 0, error: err?.message || 'Не удалось обновить' });
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleAltStore = () => {
@@ -99,19 +131,58 @@ export const UpdateModal = ({ isOpen, updateInfo, onClose }) => {
             </button>
           )}
 
+          {progress && progress.status !== 'error' && (
+            <div className="space-y-1.5">
+              <div className="h-2 w-full rounded-full bg-bg dark:bg-[#12151B] overflow-hidden border border-border/60 dark:border-[#283245]">
+                <div
+                  className="h-full bg-primary transition-all duration-300"
+                  style={{ width: `${Math.max(3, Math.min(100, progress.progress || 0))}%` }}
+                />
+              </div>
+              <p className="text-[11px] text-textMuted dark:text-[#8E98A8]">
+                {STATUS_TEXT[progress.status] || 'Обновляем…'}
+                {progress.status === 'downloading' && progress.progress ? ` ${progress.progress}%` : ''}
+              </p>
+            </div>
+          )}
+
+          {progress?.status === 'error' && (
+            <p className="text-[11px] text-red-600 dark:text-red-400 break-words">
+              {progress.error || 'Не удалось обновить'}. Можно скачать вручную со страницы релиза.
+            </p>
+          )}
+
           <button
             onClick={handleDownload}
-            className="w-full py-3.5 px-4 rounded-xl bg-primary hover:bg-primary/90 text-white font-bold text-xs sm:text-sm flex items-center justify-center space-x-2 shadow-md shadow-primary/25 transition-all active:scale-[0.98]"
+            disabled={busy}
+            className="w-full py-3.5 px-4 rounded-xl bg-primary hover:bg-primary/90 disabled:opacity-60 disabled:cursor-wait text-white font-bold text-xs sm:text-sm flex items-center justify-center space-x-2 shadow-md shadow-primary/25 transition-all active:scale-[0.98]"
           >
             <Icons.Download size={16} />
             <span>
-              {platform === 'ios' 
-                ? 'Скачать .IPA файл'
-                : platform === 'android'
-                  ? 'Скачать .APK файл'
-                  : 'Загрузить обновление'}
+              {isAuto
+                ? (busy
+                    ? 'Обновляем…'
+                    : progress?.status === 'need_permission'
+                      ? 'Установить'
+                      : progress?.status === 'error'
+                        ? 'Попробовать ещё раз'
+                        : platform === 'android' ? 'Обновить' : 'Обновить и перезапустить')
+                : platform === 'ios'
+                  ? 'Скачать .IPA файл'
+                  : platform === 'android'
+                    ? 'Скачать .APK файл'
+                    : 'Загрузить обновление'}
             </span>
           </button>
+
+          {isAuto && progress?.status === 'error' && releaseUrl && (
+            <button
+              onClick={() => window.open(releaseUrl, '_blank', 'noopener')}
+              className="w-full text-xs font-semibold text-primary hover:underline py-1"
+            >
+              Открыть страницу релиза
+            </button>
+          )}
 
           <div className="flex items-center justify-between pt-1">
             <button

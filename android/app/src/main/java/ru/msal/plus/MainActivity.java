@@ -23,6 +23,7 @@ public class MainActivity extends BridgeActivity {
         try {
             WebView webView = this.getBridge().getWebView();
             webView.addJavascriptInterface(new AndroidDownloaderInterface(), "AndroidDownloader");
+            webView.addJavascriptInterface(new AppUpdater(this), "AndroidUpdater");
         } catch (Exception e) {
             e.printStackTrace();
         }
