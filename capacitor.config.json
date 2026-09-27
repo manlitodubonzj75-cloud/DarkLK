@@ -4,6 +4,7 @@
   "webDir": "dist",
   "server": {
     "androidScheme": "https",
+    "hostname": "lk.msal.ru",
     "cleartext": true
   },
   "android": {

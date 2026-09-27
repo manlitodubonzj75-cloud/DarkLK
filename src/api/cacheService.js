@@ -1,18 +1,31 @@
 /**
- * Offline & Fallback Cache Service for MSAL+ Web
- * Encrypted with AES-GCM 256 via cryptoStorage (152-FZ zero-knowledge client protection)
- * with zero-latency memory vault for instant rendering.
+ * Offline & Fallback Cache Service for DarkMSAL
+ * High-performance, zero-latency synchronous cache engine.
  * Ensures full app functionality even when lk.msal.ru is down, slow, or unreachable.
+ * 
+ * Invariant: Fresh fetched data ALWAYS replaces old cached data immediately.
+ * Invariant: If device is offline or university server is unreachable, latest valid cache is returned.
  */
 
-import { cryptoStorage } from "./cryptoStorage.js";
-
 const CACHE_PREFIX = "msal_cache_";
-const FAST_PREFIX = "_fast_msal_cache_";
+const memoryCache = new Map();
+
+// Run immediate cleanup of legacy/orphaned keys from early builds
+if (typeof localStorage !== 'undefined') {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('_fast_msal_cache_')) {
+        localStorage.removeItem(k);
+      }
+    }
+  } catch (_) {}
+}
 
 export const cacheService = {
   /**
-   * Save data to encrypted cache with timestamp
+   * Save data to local cache with timestamp
+   * Instantly available in memory and persisted synchronously to localStorage
    */
   set(key, data) {
     if (!key || data === undefined) return;
@@ -21,42 +34,57 @@ export const cacheService = {
         data,
         timestamp: Date.now()
       };
-      // Memory vault is updated synchronously; encrypted ciphertext is saved to storage
-      cryptoStorage.setItemFast(`${CACHE_PREFIX}${key}`, payload);
+
+      // 1. Instant RAM cache
+      memoryCache.set(key, payload);
+
+      // 2. Synchronous disk persistence
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(`${CACHE_PREFIX}${key}`, JSON.stringify(payload));
+      }
     } catch (e) {
       console.warn(`[Cache] Failed to write cache for key "${key}":`, e.message);
     }
   },
 
   /**
-   * Read data from local cache (synchronous, memory vault)
+   * Synchronously read data from local cache
+   * Checks RAM first, then localStorage
    */
   get(key) {
     if (!key) return null;
+
+    // 1. Check in-memory Map
+    if (memoryCache.has(key)) {
+      const mem = memoryCache.get(key);
+      if (mem && mem.data !== undefined) {
+        return mem.data;
+      }
+    }
+
+    // 2. Check localStorage
+    if (typeof localStorage === 'undefined') return null;
+
     try {
-      // 1. Check decrypted memory vault
-      const payload = cryptoStorage.getItemSync(`${CACHE_PREFIX}${key}`);
-      if (payload && payload.data !== undefined) {
-        return payload.data;
+      const raw = localStorage.getItem(`${CACHE_PREFIX}${key}`);
+      if (!raw) return null;
+
+      // Handle legacy encrypted prefix if present
+      if (raw.startsWith('enc_v1:')) {
+        // Discard legacy encrypted entry so it doesn't mask fresh data
+        localStorage.removeItem(`${CACHE_PREFIX}${key}`);
+        return null;
       }
 
-      // 2. Fallback check for legacy unencrypted fast storage and auto-migrate
-      const rawFast = localStorage.getItem(`${FAST_PREFIX}${key}`);
-      if (rawFast) {
-        try {
-          const parsed = JSON.parse(rawFast);
-          if (parsed && parsed.data !== undefined) {
-            // Remove unencrypted entry to protect user privacy
-            localStorage.removeItem(`${FAST_PREFIX}${key}`);
-            this.set(key, parsed.data);
-            return parsed.data;
-          }
-        } catch (_) {}
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.data !== undefined) {
+        memoryCache.set(key, parsed);
+        return parsed.data;
       }
 
       return null;
     } catch (e) {
-      console.warn(`[Cache] Failed to read cache for key "${key}":`, e.message);
+      console.warn(`[Cache] Failed to parse cache for key "${key}":`, e.message);
       return null;
     }
   },
@@ -74,19 +102,26 @@ export const cacheService = {
    */
   getInfo(key) {
     if (!key) return null;
-    try {
-      const payload = cryptoStorage.getItemSync(`${CACHE_PREFIX}${key}`);
-      if (payload && payload.timestamp) {
-        return {
-          timestamp: payload.timestamp,
-          ageMs: Date.now() - payload.timestamp,
-          isCached: true
-        };
-      }
-      return null;
-    } catch (_) {
-      return null;
+
+    let payload = memoryCache.get(key);
+    if (!payload && typeof localStorage !== 'undefined') {
+      try {
+        const raw = localStorage.getItem(`${CACHE_PREFIX}${key}`);
+        if (raw && !raw.startsWith('enc_v1:')) {
+          payload = JSON.parse(raw);
+          if (payload) memoryCache.set(key, payload);
+        }
+      } catch (_) {}
     }
+
+    if (payload && payload.timestamp) {
+      return {
+        timestamp: payload.timestamp,
+        ageMs: Date.now() - payload.timestamp,
+        isCached: true
+      };
+    }
+    return null;
   },
 
   /**
@@ -94,29 +129,36 @@ export const cacheService = {
    */
   remove(key) {
     if (!key) return;
-    cryptoStorage.removeItem(`${CACHE_PREFIX}${key}`);
-    try {
-      localStorage.removeItem(`${FAST_PREFIX}${key}`);
-    } catch (_) {}
+    memoryCache.delete(key);
+    if (typeof localStorage !== 'undefined') {
+      try {
+        localStorage.removeItem(`${CACHE_PREFIX}${key}`);
+      } catch (_) {}
+    }
   },
 
   /**
    * Clear all cached data
    */
   clear() {
-    const keys = Object.keys(localStorage);
-    for (const k of keys) {
-      if (k.startsWith(CACHE_PREFIX) || k.startsWith(FAST_PREFIX)) {
-        try {
-          localStorage.removeItem(k);
-        } catch (_) {}
-      }
+    memoryCache.clear();
+    if (typeof localStorage !== 'undefined') {
+      try {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && (k.startsWith(CACHE_PREFIX) || k.startsWith('_fast_msal_cache_'))) {
+            localStorage.removeItem(k);
+          }
+        }
+      } catch (_) {}
     }
   },
 
   /**
-   * Wrap an async API fetch call with stale-while-revalidate, TTL & offline fallback.
-   * If network fails (site down / HTTP 5xx / timeout), gracefully returns cached copy.
+   * Wrap an async API fetch call with stale-while-revalidate & offline fallback.
+   * - If forced or TTL expired: tries network fetch.
+   * - When fresh data is received: ALWAYS saves to cache, replacing any stale copy.
+   * - If network fails (no internet, server 500, timeout): gracefully returns cached copy.
    *
    * @param {string} key Cache key
    * @param {Function} fetcherFn Async fetcher function
@@ -127,7 +169,7 @@ export const cacheService = {
     const info = this.getInfo(key);
     const ttl = options.ttl || null;
 
-    // Fast-path: if valid cache exists and is within TTL, return immediately without hitting network
+    // Fast-path: if valid cache exists and is within TTL, return immediately without network
     const isCachedValid = cached !== null && (!Array.isArray(cached) || cached.length > 0);
     if (!options.forceRefresh && ttl && isCachedValid && info && info.ageMs < ttl) {
       return cached;
@@ -137,22 +179,9 @@ export const cacheService = {
       // Attempt fresh fetch from server
       const freshData = await fetcherFn();
 
-      // Only cache valid, non-empty data
+      // Whenever fresh data is received from server, immediately replace cache
       if (freshData !== null && freshData !== undefined) {
-        if (Array.isArray(freshData)) {
-          if (freshData.length > 0 || !Array.isArray(cached) || cached.length === 0) {
-            this.set(key, freshData);
-          }
-          if (freshData.length === 0 && Array.isArray(cached) && cached.length > 0) {
-            return cached;
-          }
-        } else if (typeof freshData === "object") {
-          if (Object.keys(freshData).length > 0 || !cached) {
-            this.set(key, freshData);
-          }
-        } else {
-          this.set(key, freshData);
-        }
+        this.set(key, freshData);
         return freshData;
       }
 

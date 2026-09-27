@@ -1,255 +1,122 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import {
-  lkService,
-  formatISODate,
-  getMondayOfWeek,
-  formatLessonTime,
-  cacheService
-} from '../../api';
+import { useDashboardData } from '../../context/SyncContext';
+import { formatLessonTime } from '../../api';
 import { Card } from '../../components/common/Card';
 import { Badge } from '../../components/common/Badge';
 import { Icons } from '../../components/common/Icons';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 
-function extractTodayLessons(scheduleList, todayISO) {
-  if (!Array.isArray(scheduleList) || scheduleList.length === 0) return null;
-  const todayItem = scheduleList.find(day => day.title === todayISO);
-  return (todayItem && Array.isArray(todayItem.data)) ? todayItem.data : [];
-}
-
 export const DashboardPage = () => {
   const { user, isCollege } = useAuth();
   const navigate = useNavigate();
 
-  const now = new Date();
-  const todayISO = formatISODate(now);
-  const monday = getMondayOfWeek(now);
-  const mondayISO = formatISODate(monday);
-  const sunday = new Date(monday);
-  sunday.setDate(monday.getDate() + 6);
-  const sundayISO = formatISODate(sunday);
-  const scheduleCacheKey = `schedule_${mondayISO}_${sundayISO}`;
-
-  // 1. Synchronous Instant State Initialization from Encrypted Cache
-  const [scheduleToday, setScheduleToday] = useState(() => {
-    const cachedWeek = cacheService.get(scheduleCacheKey);
-    const lessons = extractTodayLessons(cachedWeek, todayISO);
-    return lessons !== null ? lessons : [];
-  });
-
-  const [isScheduleLoading, setIsScheduleLoading] = useState(() => {
-    const cachedWeek = cacheService.get(scheduleCacheKey);
-    return !Array.isArray(cachedWeek) || cachedWeek.length === 0;
-  });
-
-  const [stats, setStats] = useState(() => {
-    const cachedStudentInfo = cacheService.get('student_info');
-    const cachedProgress = cacheService.get('progress_with_lessons_latest');
-    let ratingVal = cachedStudentInfo?.reting ?? cachedStudentInfo?.rating ?? user?.rating ?? user?.reting ?? cachedProgress?.studentInfo?.reting ?? cachedProgress?.rating;
-    if ((ratingVal === undefined || ratingVal === null || ratingVal === '—') && cachedProgress?.gpa && cachedProgress.gpa !== '—') {
-      ratingVal = cachedProgress.gpa;
-    }
-    if (!ratingVal) ratingVal = '—';
-    const passesVal = cachedProgress?.passes ?? cachedStudentInfo?.passes ?? user?.passes ?? 0;
-    const missedLessons = Array.isArray(cachedProgress?.missedLessons) ? cachedProgress.missedLessons : [];
-
-    return {
-      rating: ratingVal,
-      passes: passesVal,
-      missedLessons,
-      loading: ratingVal === '—'
-    };
-  });
+  // Clean Domain Hook: single source of truth for dashboard data
+  const {
+    todayLessons,
+    hasLoadedLessons,
+    rating,
+    passes,
+    missedLessons,
+    news,
+    loading: isDataLoading
+  } = useDashboardData();
 
   const [showMissedModal, setShowMissedModal] = useState(false);
 
-  // 2. Fetch fresh data in background (decoupled for instant schedule render)
-  useEffect(() => {
-    let isMounted = true;
-
-    async function fetchSchedule(forceRefresh = false) {
-      try {
-        const weekSchedule = await lkService.getScheduleWeek(monday, { forceRefresh, ttl: 300000 });
-        if (!isMounted) return;
-        const lessons = extractTodayLessons(weekSchedule, todayISO);
-        if (lessons !== null) {
-          setScheduleToday(lessons);
-        }
-      } catch (err) {
-        console.warn('[Dashboard] Schedule load warning:', err.message);
-        if (!isMounted) return;
-        const cachedWeek = cacheService.get(scheduleCacheKey);
-        const lessons = extractTodayLessons(cachedWeek, todayISO);
-        if (lessons !== null) {
-          setScheduleToday(lessons);
-        }
-      } finally {
-        if (isMounted) setIsScheduleLoading(false);
-      }
-    }
-
-    async function fetchOtherData(forceRefresh = false) {
-      const fetchOpts = { forceRefresh, ttl: 300000 };
-      try {
-        const [progressInfo, studentInfoResp] = await Promise.allSettled([
-          lkService.getProgressWithLessons(user, fetchOpts),
-          !isCollege ? lkService.getStudentInfo(fetchOpts) : Promise.resolve({})
-        ]);
-
-        if (!isMounted) return;
-
-        // Process rating/GPA and absences with persistent cache fallback
-        const studentInfo = (studentInfoResp.status === 'fulfilled' && studentInfoResp.value)
-          ? studentInfoResp.value
-          : (cacheService.get('student_info') || {});
-
-        const progressVal = (progressInfo.status === 'fulfilled' && progressInfo.value)
-          ? progressInfo.value
-          : (cacheService.get('progress_with_lessons_latest') || null);
-
-        let ratingVal = studentInfo?.reting ?? studentInfo?.rating ?? user?.rating ?? user?.reting ?? progressVal?.studentInfo?.reting ?? progressVal?.rating;
-        if ((ratingVal === undefined || ratingVal === null || ratingVal === '—') && progressVal?.gpa && progressVal.gpa !== '—') {
-          ratingVal = progressVal.gpa;
-        }
-        const passesVal = progressVal?.passes ?? studentInfo?.passes ?? user?.passes ?? 0;
-        const missedLessons = Array.isArray(progressVal?.missedLessons) ? progressVal.missedLessons : [];
-
-        setStats(prev => ({
-          rating: (ratingVal && ratingVal !== '—') ? ratingVal : (prev.rating !== '—' ? prev.rating : ratingVal || '—'),
-          passes: passesVal ?? prev.passes ?? 0,
-          missedLessons: missedLessons.length > 0 ? missedLessons : (prev.missedLessons || []),
-          loading: false
-        }));
-      } catch (err) {
-        console.warn('Dashboard secondary data warning:', err);
-      }
-    }
-
-    function loadDashboardData(forceRefresh = false) {
-      fetchSchedule(forceRefresh);
-      fetchOtherData(forceRefresh);
-    }
-
-    loadDashboardData(false);
-
-    const handlePull = () => {
-      loadDashboardData(true);
-    };
-
-    window.addEventListener('app-pull-to-refresh', handlePull);
-
-    return () => {
-      isMounted = false;
-      window.removeEventListener('app-pull-to-refresh', handlePull);
-    };
-  }, [user, isCollege, monday, scheduleCacheKey, todayISO]);
+  const ALL_QUICK_ACTIONS = [
+    { label: 'Расписание', icon: Icons.Calendar, path: '/schedule', color: 'bg-primary' },
+    { label: 'Оценки', icon: Icons.GraduationCap, path: '/grades', color: 'bg-secondary' },
+    { label: 'Зачётка', icon: Icons.BookOpen, path: '/recordbook', color: 'bg-teal-700' },
+    { label: 'Почта', icon: Icons.Mail, path: '/mail', color: 'bg-[#036495]' },
+    { label: 'Отработки', icon: Icons.UserCheck, path: '/consultations', color: 'bg-accent' }
+  ];
 
   const QUICK_ACTIONS = isCollege
-    ? [
-        { title: 'Расписание', icon: Icons.Calendar, to: '/schedule', color: 'bg-blue-500/10 text-blue-500 hover:bg-blue-500/20' },
-        { title: 'Оценки', icon: Icons.GraduationCap, to: '/grades', color: 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20' },
-        { title: 'Зачётка', icon: Icons.BookOpen, to: '/recordbook', color: 'bg-indigo-500/10 text-indigo-500 hover:bg-indigo-500/20' },
-        { title: 'Почта MSAL', icon: Icons.Mail, to: '/mail', color: 'bg-sky-500/10 text-sky-500 hover:bg-sky-500/20' },
-        { title: 'Настройки', icon: Icons.Settings, to: '/settings', color: 'bg-purple-500/10 text-purple-500 hover:bg-purple-500/20' },
-      ]
-    : [
-        { title: 'Расписание', icon: Icons.Calendar, to: '/schedule', color: 'bg-blue-500/10 text-blue-500 hover:bg-blue-500/20' },
-        { title: 'Оценки', icon: Icons.GraduationCap, to: '/grades', color: 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20' },
-        { title: 'Зачётка', icon: Icons.BookOpen, to: '/recordbook', color: 'bg-indigo-500/10 text-indigo-500 hover:bg-indigo-500/20' },
-        { title: 'Почта MSAL', icon: Icons.Mail, to: '/mail', color: 'bg-sky-500/10 text-sky-500 hover:bg-sky-500/20' },
-        { title: 'Отработки', icon: Icons.UserCheck, to: '/consultations', color: 'bg-amber-500/10 text-amber-500 hover:bg-amber-500/20' },
-        { title: 'Настройки', icon: Icons.Settings, to: '/settings', color: 'bg-purple-500/10 text-purple-500 hover:bg-purple-500/20' },
-      ];
+    ? ALL_QUICK_ACTIONS.filter(action => action.path !== '/consultations')
+    : ALL_QUICK_ACTIONS;
 
   return (
-    <div className="space-y-6">
-      {/* Welcome Card */}
-      <div className="bg-gradient-to-r from-primary to-accent rounded-3xl p-6 text-white shadow-xl relative overflow-hidden">
-        <div className="absolute right-0 top-0 bottom-0 opacity-10 flex items-center pr-6 pointer-events-none">
-          <Icons.GraduationCap size={160} />
-        </div>
-        <div className="relative z-10">
-          <Badge variant="accent" className="bg-white/20 text-white border-0 mb-3 px-3 py-1">
-            Личный кабинет • {isCollege ? 'Колледж' : 'Бакалавриат / Специалитет'}
-          </Badge>
-          <h1 className="text-2xl sm:text-3xl font-black tracking-tight mb-2 text-white">
-            Привет, {user?.name?.split(' ')[1] || user?.name || 'студент'}! 👋
+    <div className="space-y-6 pb-6">
+      {/* Greeting Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-textMuted dark:text-[#8E98A8]">
+            {new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}
+          </p>
+          <h1 className="text-2xl font-black text-dark dark:text-white mt-0.5">
+            Привет, {user?.name ? (user.name.split(' ')[1] || user.name.split(' ')[0]) : 'Студент'} 👋
           </h1>
-          <p className="text-white/80 text-sm max-w-lg">
-            Группа <span className="font-semibold text-white">{user?.group || '—'}</span> • {user?.course ? `${user.course} курс` : 'Студент МГЮА'}
+          <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-1">
+            {user?.department || user?.faculty || (isCollege ? 'Колледж МГЮА им. О.Е. Кутафина' : 'МГЮА им. О.Е. Кутафина')} • {user?.group ? `Группа ${user.group}` : (user?.speciality || user?.role || '')}
           </p>
         </div>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <Card className="flex items-center space-x-3 p-4">
-          <div className="w-10 h-10 rounded-2xl bg-blue-500/10 text-blue-500 flex items-center justify-center shrink-0">
-            <Icons.Layers size={20} />
-          </div>
-          <div className="min-w-0">
-            <p className="text-xs text-textMuted dark:text-[#8E98A8] font-medium">Курс</p>
-            <p className="text-lg font-bold text-dark dark:text-white truncate">
-              {user?.course || '—'}
-            </p>
-          </div>
-        </Card>
+      {/* Quick Action Navigation */}
+      <div>
+        <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted dark:text-[#8E98A8] mb-3">
+          Быстрый доступ
+        </h3>
+        <div className="grid grid-cols-4 sm:grid-cols-5 gap-3">
+          {QUICK_ACTIONS.map(action => {
+            const Icon = action.icon;
+            return (
+              <button
+                key={action.path}
+                onClick={() => navigate(action.path)}
+                className="flex flex-col items-center justify-center p-3 rounded-2xl bg-card dark:bg-[#1F2430] border border-border dark:border-[#2B3242] hover:border-accent dark:hover:border-[#38BDF8] hover:shadow-sm transition-all text-center group cursor-pointer"
+              >
+                <div className={`w-10 h-10 rounded-xl ${action.color} text-white flex items-center justify-center mb-2 shadow-sm group-hover:scale-105 transition-transform`}>
+                  <Icon size={20} />
+                </div>
+                <span className="text-xs font-bold text-dark dark:text-white">{action.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
-        <Card className="flex items-center space-x-3 p-4">
-          <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-500 flex items-center justify-center shrink-0">
-            <Icons.Award size={20} />
+      {/* Academic Highlights: Student Rating & Passes */}
+      <div className="grid grid-cols-2 gap-3 sm:gap-4">
+        <Card className="p-3.5 sm:p-4 flex items-center space-x-3 border border-border dark:border-[#2B3242]">
+          <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary dark:text-[#38BDF8] flex items-center justify-center shrink-0">
+            <Icons.Award size={22} />
           </div>
           <div className="min-w-0">
-            <p className="text-xs text-textMuted dark:text-[#8E98A8] font-medium">Семестр</p>
-            <p className="text-lg font-bold text-dark dark:text-white truncate">
-              {user?.semester || '—'}
-            </p>
-          </div>
-        </Card>
-
-        <Card className="flex items-center space-x-3 p-4">
-          <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 text-indigo-500 flex items-center justify-center shrink-0">
-            <Icons.Star size={20} />
-          </div>
-          <div className="min-w-0">
-            <p className="text-xs text-textMuted dark:text-[#8E98A8] font-medium">
-              {isCollege ? 'Ср. балл' : 'Рейтинг'}
-            </p>
-            <p className="text-lg font-bold text-dark dark:text-white truncate">
-              {stats.loading ? '...' : (stats.rating !== '—' && stats.rating !== undefined && stats.rating !== null ? stats.rating : '—')}
-            </p>
+            <p className="text-xs text-textMuted dark:text-[#8E98A8] font-medium truncate">Рейтинг</p>
+            <h4 className="text-lg sm:text-xl font-black text-dark dark:text-white mt-0.5 truncate">
+              {isDataLoading ? '—' : (rating !== '—' && rating !== undefined && rating !== null ? rating : '—')}
+            </h4>
           </div>
         </Card>
 
         <Card
           onClick={() => {
-            if (stats.missedLessons.length > 0) setShowMissedModal(true);
+            if (missedLessons.length > 0) setShowMissedModal(true);
           }}
-          className={`flex items-center space-x-3 p-4 transition-all ${
-            stats.missedLessons.length > 0
-              ? 'cursor-pointer hover:border-amber-500/40 hover:bg-amber-500/5 active:scale-[0.98]'
-              : ''
+          className={`p-3.5 sm:p-4 flex items-center justify-between border border-border dark:border-[#2B3242] ${
+            missedLessons.length > 0 ? 'cursor-pointer hover:border-accent dark:hover:border-[#38BDF8] transition-colors' : ''
           }`}
-          title={stats.missedLessons.length > 0 ? "Нажмите для просмотра пропущенных занятий" : undefined}
+          title={missedLessons.length > 0 ? "Нажмите для просмотра пропущенных занятий" : undefined}
         >
-          <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${
-            stats.passes > 0 ? 'bg-amber-500/10 text-amber-500' : 'bg-slate-500/10 text-slate-400'
-          }`}>
-            <Icons.Clock size={20} />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center justify-between">
-              <p className="text-xs text-textMuted dark:text-[#8E98A8] font-medium">Пропуски</p>
-              {stats.missedLessons.length > 0 && (
-                <span className="text-[10px] text-amber-500 font-bold ml-1">Детали →</span>
-              )}
+          <div className="flex items-center space-x-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-accent/10 text-accent dark:text-[#38BDF8] flex items-center justify-center shrink-0">
+              <Icons.Clock size={22} />
             </div>
-            <p className={`text-lg font-bold truncate ${stats.passes > 0 ? 'text-amber-500' : 'text-dark dark:text-white'}`}>
-              {stats.loading ? '...' : (isCollege ? `${stats.passes} ч.` : stats.passes)}
-            </p>
+            <div className="min-w-0">
+              <p className="text-xs text-textMuted dark:text-[#8E98A8] font-medium truncate">Пропуски (акад. ч)</p>
+              <h4 className="text-lg sm:text-xl font-black text-dark dark:text-white mt-0.5 truncate">
+                {isDataLoading ? '—' : passes}
+              </h4>
+            </div>
           </div>
+          {missedLessons.length > 0 && (
+            <span className="text-xs font-bold text-accent dark:text-[#38BDF8] hover:underline shrink-0 ml-2">
+              Детали →
+            </span>
+          )}
         </Card>
       </div>
 
@@ -270,7 +137,7 @@ export const DashboardPage = () => {
                 </div>
                 <div>
                   <h3 className="font-bold text-base text-dark dark:text-white">Пропущенные занятия</h3>
-                  <p className="text-xs text-textMuted dark:text-[#8E98A8]">Всего пропущено: {stats.passes} ч.</p>
+                  <p className="text-xs text-textMuted dark:text-[#8E98A8]">Всего пропущено: {passes} ч.</p>
                 </div>
               </div>
               <button
@@ -281,13 +148,13 @@ export const DashboardPage = () => {
               </button>
             </div>
             <div className="p-5 overflow-y-auto space-y-3 flex-1">
-              {stats.missedLessons.map((l, i) => (
+              {missedLessons.map((l, i) => (
                 <div key={i} className="p-3.5 rounded-2xl bg-bg dark:bg-[#12151B] border border-border/50 dark:border-[#2B3242]/50 flex items-start space-x-3">
                   <div className="w-7 h-7 rounded-lg bg-rose-500/10 text-rose-500 flex items-center justify-center shrink-0 mt-0.5 font-bold text-xs">
                     Н
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="font-semibold text-xs sm:text-sm text-dark dark:text-white">{l.discipline}</p>
+                    <p className="font-semibold text-xs sm:text-sm text-dark dark:text-white">{l.discipline || l.name || l.title}</p>
                     <p className="text-[11px] text-textMuted dark:text-[#8E98A8] mt-0.5">
                       {l.date} • {l.theme || l.type || 'Занятие'}
                     </p>
@@ -299,107 +166,108 @@ export const DashboardPage = () => {
         </div>
       )}
 
-      {/* Today Schedule Section */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <Icons.Calendar size={20} className="text-primary dark:text-[#38BDF8]" />
-            <h2 className="text-lg font-bold text-dark dark:text-white">Расписание на сегодня</h2>
-          </div>
+      {/* Today's Classes */}
+      <div>
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted dark:text-[#8E98A8]">
+            Расписание на сегодня
+          </h3>
           <button
             onClick={() => navigate('/schedule')}
-            className="text-xs font-semibold text-primary dark:text-[#38BDF8] hover:underline flex items-center space-x-1"
+            className="text-xs font-bold text-secondary dark:text-[#38BDF8] hover:underline"
           >
-            <span>На неделю</span>
-            <Icons.ArrowRight size={14} />
+            Все занятия →
           </button>
         </div>
 
-        {isScheduleLoading ? (
-          <div className="py-12 flex justify-center">
-            <LoadingSpinner size={8} text="Загрузка расписания..." />
-          </div>
-        ) : scheduleToday.length === 0 ? (
-          <Card className="p-8 text-center">
-            <div className="w-12 h-12 rounded-full bg-emerald-500/10 text-emerald-500 flex items-center justify-center mx-auto mb-3">
-              <Icons.Coffee size={24} />
+        {!hasLoadedLessons && isDataLoading ? (
+          <Card className="p-8 text-center border border-border dark:border-[#2B3242]">
+            <LoadingSpinner size={8} text="Загрузка занятий..." />
+          </Card>
+        ) : todayLessons.length === 0 ? (
+          <Card className="p-8 text-center border border-border dark:border-[#2B3242]">
+            <div className="w-12 h-12 rounded-full bg-accent/10 mx-auto flex items-center justify-center text-accent dark:text-[#38BDF8] mb-3">
+              <Icons.Calendar size={24} />
             </div>
-            <p className="font-bold text-dark dark:text-white text-base">Сегодня занятий нет!</p>
-            <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-1">
-              Отличный повод отдохнуть или повторить пройденный материал.
-            </p>
+            <h4 className="text-base font-bold text-dark dark:text-white">Сегодня занятий нет</h4>
+            <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-1">Отличный день для подготовки или отдыха!</p>
           </Card>
         ) : (
           <div className="space-y-3">
-            {scheduleToday.map((lesson, idx) => (
-              <Card
-                key={idx}
-                className={`p-4 transition-all ${
-                  lesson.isConsultation
-                    ? 'border-l-4 border-l-amber-500 bg-amber-500/5'
-                    : 'border-l-4 border-l-primary'
-                }`}
-              >
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div className="space-y-1">
-                    <div className="flex items-center space-x-2">
-                      <span className="text-xs font-bold text-primary dark:text-[#38BDF8]">
-                        {formatLessonTime(lesson.start, lesson.end)}
-                      </span>
-                      <Badge variant={lesson.isConsultation ? "warning" : "primary"} size="sm">
-                        {lesson.type || (lesson.isConsultation ? 'Консультация' : 'Занятие')}
-                      </Badge>
-                      {lesson.subgroup ? (
-                        <Badge variant="neutral" size="sm">
-                          {lesson.subgroup} п/г
-                        </Badge>
-                      ) : null}
+            {todayLessons.map((lesson, idx) => {
+              const teacherName = lesson.teacher || lesson.lecturer || lesson.tutor;
+              const room = lesson.classroom || lesson.auditory || lesson.room;
+
+              return (
+                <Card key={lesson.id || idx} className="p-4 sm:p-5 hover:border-accent dark:hover:border-[#38BDF8] transition-colors overflow-hidden w-full min-w-0 border border-border dark:border-[#2B3242]">
+                  {/* Header: Time badge on left, Lesson Type & Corps on right */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2 w-full min-w-0">
+                    <div className="px-2.5 py-1 rounded-lg bg-primary/10 text-primary dark:text-[#38BDF8] font-bold text-xs sm:text-sm shrink-0">
+                      {formatLessonTime(lesson)}
                     </div>
-                    <h3 className="font-bold text-sm sm:text-base text-dark dark:text-white">
-                      {lesson.title}
-                    </h3>
-                    {lesson.teacher && (
-                      <p className="text-xs text-textMuted dark:text-[#8E98A8] flex items-center space-x-1">
-                        <Icons.User size={12} />
-                        <span>{lesson.teacher}</span>
-                      </p>
-                    )}
+                    <div className="flex flex-wrap items-center justify-end gap-1.5 min-w-0 max-w-[60%] sm:max-w-none">
+                      {lesson.type && (
+                        <Badge 
+                          type={lesson.isConsultation ? 'secondary' : 'primary'}
+                          className="max-w-[180px] sm:max-w-[280px] truncate text-[11px] font-semibold"
+                          title={lesson.type}
+                        >
+                          {lesson.type}
+                        </Badge>
+                      )}
+                      {lesson.corps && (
+                        <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-bg dark:bg-[#12151B] text-textMuted dark:text-[#8E98A8] border border-border dark:border-[#2B3242] shrink-0">
+                          {lesson.corps}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  {lesson.classroom && (
-                    <div className="self-start sm:self-center shrink-0">
-                      <span className="inline-flex items-center space-x-1 px-3 py-1 rounded-xl bg-bg dark:bg-[#12151B] text-dark dark:text-white font-semibold text-xs border border-border dark:border-[#2B3242]">
-                        <Icons.MapPin size={12} className="text-textMuted" />
-                        <span>ауд. {lesson.classroom}</span>
-                      </span>
+
+                  {/* Body: Full-width discipline title */}
+                  <h4 className="text-base sm:text-lg font-bold text-dark dark:text-white leading-snug break-words">
+                    {lesson.discipline || lesson.subject || lesson.title}
+                  </h4>
+
+                  {/* Footer: Auditory & Teacher */}
+                  {(room || teacherName) && (
+                    <div className="mt-3 pt-2.5 border-t border-border dark:border-[#2B3242] flex flex-wrap items-center justify-between gap-2 text-xs text-textMuted dark:text-[#8E98A8]">
+                      {room && (
+                        <span className="font-semibold text-dark dark:text-white">
+                          Аудитория: {room}
+                        </span>
+                      )}
+                      {teacherName && (
+                        <div className="flex items-center space-x-1 text-secondary dark:text-[#38BDF8] font-medium">
+                          <Icons.User size={14} />
+                          <span>{teacherName}</span>
+                        </div>
+                      )}
                     </div>
                   )}
-                </div>
-              </Card>
-            ))}
+                </Card>
+              );
+            })}
           </div>
         )}
       </div>
 
-      {/* Quick Navigation Grid */}
-      <div className="space-y-3">
-        <h2 className="text-lg font-bold text-dark dark:text-white">Быстрый доступ</h2>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          {QUICK_ACTIONS.map((action, idx) => (
-            <Card
-              key={idx}
-              onClick={() => navigate(action.to)}
-              className="p-4 flex items-center space-x-3 cursor-pointer hover:border-primary/50 transition-all active:scale-[0.98] group"
-            >
-              <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-110 ${action.color}`}>
-                <action.icon size={20} />
-              </div>
-              <span className="font-bold text-sm text-dark dark:text-white group-hover:text-primary dark:group-hover:text-[#38BDF8] transition-colors">
-                {action.title}
-              </span>
-            </Card>
-          ))}
+      {/* University News Feed */}
+      {Array.isArray(news) && news.length > 0 && (
+        <div>
+          <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted dark:text-[#8E98A8] mb-3">
+            Новости университета
+          </h3>
+          <div className="space-y-3">
+            {news.map((item, idx) => (
+              <Card key={item.id || idx} className="p-4 border border-border dark:border-[#2B3242]">
+                <h4 className="text-sm font-bold text-dark dark:text-white">{item.title || item.name}</h4>
+                {item.date && <span className="text-[11px] text-textMuted dark:text-[#8E98A8]">{item.date}</span>}
+                {item.preview && <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-1 leading-relaxed">{item.preview}</p>}
+              </Card>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };

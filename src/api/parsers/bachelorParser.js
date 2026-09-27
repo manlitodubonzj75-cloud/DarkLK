@@ -9,23 +9,23 @@
  * - Bulk details fetching with fallback per-discipline queue
  */
 
-import { runWithConcurrency } from '../utils/concurrency.js';
+import { runWithConcurrency } from "../utils/concurrency.js";
 
 function normalizeDisciplineName(name) {
-  if (!name) return '';
-  return name.toLowerCase().replace(/[^a-zа-я0-9]/gi, '').trim();
+  if (!name) return "";
+  return name.toLowerCase().replace(/[^a-zа-я0-9]/gi, "").trim();
 }
 
 function parseScore(val) {
-  if (val === null || val === undefined || val === '') return 0;
-  if (typeof val === 'number') return isNaN(val) ? 0 : val;
-  const cleaned = String(val).replace(',', '.').replace(/[^0-9.]/g, '');
+  if (val === null || val === undefined || val === "") return 0;
+  if (typeof val === "number") return isNaN(val) ? 0 : val;
+  const cleaned = String(val).replace(",", ".").replace(/[^0-9.]/g, "");
   const n = parseFloat(cleaned);
   return isNaN(n) ? 0 : n;
 }
 
 function parseGrade(val) {
-  if (val === null || val === undefined || val === '') return 0;
+  if (val === null || val === undefined || val === "") return 0;
   const num = parseInt(val, 10);
   if (!isNaN(num) && num >= 2 && num <= 5) return num;
   return 0;
@@ -73,29 +73,23 @@ function filterSemesterProgress(data = [], course, semester) {
 
 /**
  * Parses and enriches Bachelor progress data.
- *
- * @param {Array} rawProgress Array of progress items from /progress
- * @param {number} activeCourse Detected course
- * @param {number} activeSemester Detected semester
- * @param {Object} studentInfo Profile object from /student/info
- * @param {Object} context Context containing { apiClient, cacheService, getProgressDetails }
- * @returns {Promise<Object>} Unified progress object formatted for Bachelor UI
  */
 export async function parseBachelorProgress(
   rawProgress,
   activeCourse,
   activeSemester,
   studentInfo,
-  { apiClient, cacheService, getProgressDetails }
+  context = {}
 ) {
+  const { apiClient, cacheService, getProgressDetails, options } = context;
   const targetDisciplines = filterSemesterProgress(rawProgress, activeCourse, activeSemester);
 
   // 1. Fetch bulk progress details
   let bulkDetails = [];
   try {
-    if (typeof getProgressDetails === 'function') {
-      bulkDetails = await getProgressDetails(activeCourse, activeSemester);
-    } else {
+    if (typeof getProgressDetails === "function") {
+      bulkDetails = await getProgressDetails(activeCourse, activeSemester, null, options);
+    } else if (typeof apiClient === "function") {
       const res = await apiClient(`/progress/details?course=${activeCourse}&semester=${activeSemester}`).catch(() => []);
       bulkDetails = Array.isArray(res) ? res : [];
     }
@@ -109,13 +103,13 @@ export async function parseBachelorProgress(
     });
   }
 
-  // 2. Fetch missing individual details with conservative limit (max 3) to prevent mobile socket starvation
-  if (targetDisciplines.length > 0) {
+  // 2. Fetch missing individual details with concurrency limit
+  if (targetDisciplines.length > 0 && typeof apiClient === "function") {
     const needsFetch = targetDisciplines.filter((d) => {
       const key = normalizeDisciplineName(d.name || d.discipline);
       const existing = detailsMap.get(key);
       return !existing || !Array.isArray(existing.modules) || existing.modules.length === 0;
-    }).slice(0, 3); // Capped to 3 to prevent network freezing
+    }).slice(0, 15);
 
     if (needsFetch.length > 0) {
       const taskFns = needsFetch.map((d) => async () => {
@@ -124,7 +118,7 @@ export async function parseBachelorProgress(
         try {
           const res = await apiClient(
             `/progress/details?disciplineID=${guid}&course=${activeCourse}&semester=${activeSemester}`,
-            { timeout: 6000 }
+            { timeout: 8000 }
           );
           const detObj = Array.isArray(res) ? res[0] : res;
           if (detObj) {
@@ -135,9 +129,9 @@ export async function parseBachelorProgress(
         return null;
       });
 
-      const results = await runWithConcurrency(taskFns, 2);
+      const results = await runWithConcurrency(taskFns, 3);
       results.forEach((r) => {
-        if (r.status === 'fulfilled' && r.value && r.value.key) {
+        if (r.status === "fulfilled" && r.value && r.value.key) {
           detailsMap.set(r.value.key, r.value.data);
         }
       });
@@ -147,94 +141,167 @@ export async function parseBachelorProgress(
   let totalPasses = 0;
   let allGrades = [];
   let allModuleScores = [];
+  let allMissedLessons = [];
   let unadmittedCount = 0;
 
-  const disciplines = targetDisciplines.map((d, index) => {
-    const name = d.name || d.discipline || d.title || `Дисциплина #${index + 1}`;
-    const normKey = normalizeDisciplineName(name);
-    const details = detailsMap.get(normKey) || {};
+  const baseList = targetDisciplines.length > 0 ? targetDisciplines : Array.from(detailsMap.values());
 
-    const passCount = Number(details.passes ?? d.passes ?? 0);
-    totalPasses += passCount;
+  const enrichedDisciplines = baseList.map((d, idx) => {
+    const discName = (d.name || d.discipline || d.title || `Дисциплина #${idx + 1}`).trim();
+    const normName = normalizeDisciplineName(discName);
 
-    // Exam / Credit Admission Status
-    const accessTotal = details.accessTotal !== undefined ? details.accessTotal : d.accessTotal;
-    const isAdmitted = accessTotal === undefined || accessTotal === null || accessTotal === true || accessTotal === 1;
-    if (!isAdmitted) {
-      unadmittedCount++;
+    let detail = detailsMap.get(normName);
+    if (!detail) {
+      for (const [k, v] of detailsMap.entries()) {
+        if (k.includes(normName) || normName.includes(k)) {
+          detail = v;
+          break;
+        }
+      }
+    }
+    if (!detail && d.modules) {
+      detail = d;
     }
 
-    // Modules
-    const rawModules = Array.isArray(details.modules) && details.modules.length > 0
-      ? details.modules
-      : (Array.isArray(d.modules) ? d.modules : []);
+    let passes = 0;
+    let discGrades = [];
+    let moduleScores = [];
+    let rawModules = [];
+    let access = true;
+    let info = "";
 
-    const modules = rawModules.map((m, mIdx) => {
-      const mScore = parseScore(m.score ?? m.points ?? m.ball);
-      if (mScore > 0) allModuleScores.push(mScore);
+    if (detail) {
+      if (detail.accessTotal !== undefined) {
+        access = detail.accessTotal === 1 || detail.accessTotal === true || String(detail.accessTotal).toLowerCase() === "true";
+      } else if (detail.access !== undefined) {
+        access = detail.access === true || detail.access === 1 || String(detail.access).toLowerCase() === "true";
+      }
 
-      const lessons = (Array.isArray(m.lessons) ? m.lessons : []).map(l => ({
-        date: l.date || '',
-        theme: l.theme || l.name || '',
-        score: parseScore(l.score ?? l.points),
-        type: l.type || l.kind || 'Занятие',
-        isPassed: Boolean(l.isPassed ?? l.visited ?? true)
-      }));
+      info = (detail.debtReport || detail.info || "").toString().replace(/[\r\n]+/g, " ").trim();
 
-      return {
-        id: m.id || `mod_${mIdx}`,
-        name: m.name || m.title || `Модуль ${mIdx + 1}`,
-        score: mScore,
-        maxScore: parseScore(m.maxScore ?? m.maxPoints ?? 50),
-        lessons
-      };
-    });
+      rawModules = Array.isArray(detail.modules) ? detail.modules : [];
 
-    // Total Score and Final Grade
-    const totalScore = parseScore(details.totalScore ?? d.totalScore ?? d.points ?? 0);
-    const grade = parseGrade(details.grade ?? d.grade ?? d.mark);
-    if (grade > 0) allGrades.push(grade);
+      // Parse BARS Modules
+      rawModules.forEach((m) => {
+        const modScore = parseScore(m.mediumScore ?? m.score ?? m.points ?? m.ball);
+        const modName = (m.module || m.name || "БМ").toString().trim();
+
+        moduleScores.push({
+          name: modName,
+          score: modScore,
+          displayScore: `${modScore} б.`
+        });
+
+        if (modScore > 0) {
+          allModuleScores.push(modScore);
+        }
+
+        if (Array.isArray(m.themes)) {
+          m.themes.forEach((t) => {
+            if (Array.isArray(t.items)) {
+              t.items.forEach((it) => {
+                const isMissed = it.missed === 1 || it.missed === "1" || it.turnout === false || it.turnout === "false";
+                if (isMissed) {
+                  passes++;
+                  totalPasses++;
+                  allMissedLessons.push({
+                    discipline: discName,
+                    date: it.date || t.date || '',
+                    teacher: it.teacher || (Array.isArray(d.professors) ? d.professors[0] : (d.teacher || '')),
+                    theme: it.theme || t.theme || it.name || 'Занятие',
+                    subgroup: it.subgroup || 0
+                  });
+                }
+
+                let grade = parseGrade(it.ball);
+                if (grade === 0 && it.ratings) {
+                  const rList = Array.isArray(it.ratings) ? it.ratings : [it.ratings];
+                  for (const r of rList) {
+                    const parsed = parseGrade(r);
+                    if (parsed > 0) { grade = parsed; break; }
+                  }
+                }
+                if (grade === 0 && it.grades) {
+                  const gList = Array.isArray(it.grades) ? it.grades : [it.grades];
+                  for (const g of gList) {
+                    const parsed = parseGrade(g);
+                    if (parsed > 0) { grade = parsed; break; }
+                  }
+                }
+
+                if (grade > 0) {
+                  discGrades.push(grade);
+                  allGrades.push(grade);
+                }
+              });
+            }
+          });
+        }
+      });
+    } else {
+      if (d.accessTotal !== undefined) {
+        access = d.accessTotal === 1 || d.accessTotal === true || String(d.accessTotal).toLowerCase() === "true";
+      } else if (d.access !== undefined) {
+        access = d.access === true || d.access === 1 || String(d.access).toLowerCase() === "true";
+      }
+    }
+
+    if (!access) unadmittedCount++;
+
+    const avgGrade = discGrades.length > 0
+      ? (discGrades.reduce((a, b) => a + b, 0) / discGrades.length).toFixed(2)
+      : (moduleScores.some((m) => m.score > 0)
+          ? (moduleScores.reduce((sum, m) => sum + m.score, 0) / moduleScores.length).toFixed(2)
+          : null);
+
+    const totalBars = moduleScores.reduce((sum, m) => sum + m.score, 0);
 
     return {
-      id: d.guid || d.id || `disc_${index}`,
-      name,
-      teacher: details.teacher || d.teacher || d.teacherName || '',
-      type: details.controlType || d.controlType || d.type || 'Зачёт/Экзамен',
-      totalScore,
-      grade,
-      passes: passCount,
-      isAdmitted,
-      modules
+      id: d.guid || d.id || idx,
+      name: discName,
+      type: d.type || detailsMap.get(normName)?.controlType || "Дисциплина",
+      professors: d.professors || (d.teacher ? [d.teacher] : []),
+      access,
+      isAdmitted: access,
+      info,
+      passes,
+      grades: discGrades,
+      avgGrade,
+      barsScore: totalBars > 0 ? totalBars.toFixed(2) : null,
+      moduleScores,
+      modules: rawModules
     };
   });
 
-  // Calculate Overall GPA / BARS Rating
-  let rating = studentInfo?.reting ?? studentInfo?.rating;
-  if (!rating || rating === 0 || rating === '0') {
-    if (allModuleScores.length > 0) {
-      const sum = allModuleScores.reduce((acc, s) => acc + s, 0);
-      rating = Math.round(sum / allModuleScores.length);
-    } else if (allGrades.length > 0) {
-      const sum = allGrades.reduce((acc, g) => acc + g, 0);
-      rating = (sum / allGrades.length).toFixed(2);
-    } else {
-      rating = '—';
-    }
+  // If detailed calculation didn't find any missed lessons, check studentInfo fallback
+  if (totalPasses === 0 && studentInfo && typeof studentInfo.passes === "number") {
+    totalPasses = studentInfo.passes;
   }
 
-  // Calculate Absences
-  const passes = studentInfo?.passes !== undefined && studentInfo?.passes !== null
-    ? Number(studentInfo.passes)
-    : totalPasses;
+  const overallGpa = allGrades.length > 0
+    ? (allGrades.reduce((a, b) => a + b, 0) / allGrades.length).toFixed(2)
+    : (allModuleScores.length > 0
+        ? (allModuleScores.reduce((sum, m) => sum + m.score, 0) / allModuleScores.length).toFixed(2)
+        : (studentInfo?.reting ? String(studentInfo.reting) : "—"));
+
+  const totalGradeDistribution = {};
+  allGrades.forEach((g) => {
+    totalGradeDistribution[g] = (totalGradeDistribution[g] || 0) + 1;
+  });
 
   return {
-    studentType: 'bachelor',
+    activeCourse,
+    activeSemester,
     course: activeCourse,
     semester: activeSemester,
-    rating,
-    passes,
+    disciplines: enrichedDisciplines,
+    passes: totalPasses,
+    missedLessons: allMissedLessons,
+    gpa: overallGpa,
+    rating: studentInfo?.reting ? String(studentInfo.reting) : overallGpa,
     unadmittedCount,
-    disciplines,
-    studentInfo
+    isAdmitted: unadmittedCount === 0,
+    totalGradesCount: allGrades.length,
+    gradeDistribution: totalGradeDistribution
   };
 }

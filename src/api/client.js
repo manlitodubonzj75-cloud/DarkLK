@@ -2,24 +2,30 @@
  * MSAL Client API Module
  * Direct cross-platform client for official MSAL (МГЮА) LK API
  * Operates without intermediate backend proxy (152-FZ zero data retention)
+ * 
+ * Supports:
+ * - Android & iOS (via CapacitorHttp native OkHttp/NSURLSession, bypassing WebView CORS)
+ * - Electron Desktop (direct HTTPS or local proxy)
+ * - Userscript (in-browser direct HTTPS to lk.msal.ru)
+ * - Local Vite Development (via '/api' proxy)
  */
 
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { cryptoStorage } from './cryptoStorage';
+
+const isCapacitorNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
 
 const isUserscriptOrMsalDomain = typeof window !== 'undefined' && (
   window.location.hostname.includes('msal.ru') ||
-  window.location.hostname === 'localhost' ||
   window.location.protocol === 'file:' ||
   window.location.protocol === 'capacitor:' ||
   window.location.protocol === 'ionic:'
 );
 
-const isNativeEnv = (typeof window !== 'undefined') && (
+const isNativeEnv = isCapacitorNative || (typeof window !== 'undefined' && (
   Boolean(window.electronAPI?.apiBaseUrl) ||
-  Boolean(window.Capacitor?.isNativePlatform?.()) ||
-  window.Capacitor?.getPlatform?.() === 'android' || window.Capacitor?.getPlatform?.() === 'ios' ||
   isUserscriptOrMsalDomain
-);
+));
 
 const BASE_URL = isNativeEnv
   ? 'https://lk.msal.ru:3443'
@@ -29,9 +35,8 @@ const BASE_URL = isNativeEnv
 function getPlatformDeviceHeaders() {
   if (typeof window === 'undefined') return {};
 
-  const isAndroid = /Android/i.test(navigator.userAgent);
-  const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-  const isCapacitor = Boolean(window.Capacitor?.isNativePlatform?.());
+  const isAndroid = isCapacitorNative ? (Capacitor.getPlatform() === 'android') : /Android/i.test(navigator.userAgent);
+  const isIOS = isCapacitorNative ? (Capacitor.getPlatform() === 'ios') : /iPhone|iPad|iPod/i.test(navigator.userAgent);
 
   let clientName = 'Chrome';
   if (/Firefox/i.test(navigator.userAgent)) clientName = 'Firefox';
@@ -40,10 +45,10 @@ function getPlatformDeviceHeaders() {
   let os = 'Desktop';
   let deviceType = 'desktop';
 
-  if (isAndroid || window.Capacitor?.getPlatform?.() === 'android') {
+  if (isAndroid) {
     os = 'Android';
     deviceType = 'mobile';
-  } else if (isIOS || window.Capacitor?.getPlatform?.() === 'ios') {
+  } else if (isIOS) {
     os = 'iOS';
     deviceType = 'mobile';
   } else if (navigator.platform?.includes('Mac')) {
@@ -54,7 +59,7 @@ function getPlatformDeviceHeaders() {
     os = 'Linux';
   }
 
-  const deviceHeader = `ClientType: ${isCapacitor ? 'app' : 'browser'}, ClientName: ${clientName}, ClientVersion: 135.0, DeviceOS: ${os}, DeviceType: ${deviceType}`;
+  const deviceHeader = `ClientType: ${isCapacitorNative ? 'app' : 'browser'}, ClientName: ${clientName}, ClientVersion: 135.0, DeviceOS: ${os}, DeviceType: ${deviceType}`;
 
   return {
     'X-Device-Model': deviceHeader,
@@ -78,9 +83,81 @@ function getStandardHeaders(explicitToken = null) {
 }
 
 /**
- * Wrapper around fetch with timeout via AbortController to prevent infinite hanging
+ * Native Capacitor HTTP requester using OkHttp on Android & NSURLSession on iOS.
+ * Completely eliminates browser WebView CORS restrictions.
+ */
+async function nativeCapacitorFetch(url, options = {}, timeoutMs = 15000) {
+  const method = (options.method || 'GET').toUpperCase();
+  const headers = options.headers || {};
+  let data = undefined;
+
+  if (options.body) {
+    if (typeof options.body === 'string') {
+      try {
+        data = JSON.parse(options.body);
+      } catch (_) {
+        data = options.body;
+      }
+    } else {
+      data = options.body;
+    }
+  }
+
+  try {
+    const res = await CapacitorHttp.request({
+      url,
+      method,
+      headers,
+      data,
+      connectTimeout: timeoutMs,
+      readTimeout: timeoutMs
+    });
+
+    return {
+      status: res.status,
+      ok: res.status >= 200 && res.status < 300,
+      headers: {
+        get: (h) => {
+          if (!res.headers) return null;
+          const target = h.toLowerCase();
+          for (const [k, v] of Object.entries(res.headers)) {
+            if (k.toLowerCase() === target) return v;
+          }
+          return null;
+        }
+      },
+      json: async () => {
+        if (typeof res.data === 'string') {
+          try {
+            return JSON.parse(res.data);
+          } catch (_) {
+            return res.data;
+          }
+        }
+        return res.data;
+      },
+      text: async () => {
+        if (typeof res.data === 'object' && res.data !== null) {
+          return JSON.stringify(res.data);
+        }
+        return String(res.data || '');
+      }
+    };
+  } catch (err) {
+    const error = new Error(err.message || 'Capacitor network error');
+    error.status = 0;
+    throw error;
+  }
+}
+
+/**
+ * Universal wrapper around fetch with timeout via AbortController or native mobile client
  */
 async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+  if (isCapacitorNative) {
+    return nativeCapacitorFetch(url, options, timeoutMs);
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -146,7 +223,7 @@ export async function tryRefreshToken() {
       }
 
       // 2. Silent re-login with saved credentials from AES-GCM encrypted cryptoStorage
-      const { login: savedLogin, password: savedPassword } = cryptoStorage.getSavedCredentials();
+      const { login: savedLogin, password: savedPassword } = await cryptoStorage.getSavedCredentialsAsync();
       if (savedLogin && savedPassword) {
         try {
           const response = await fetchWithTimeout(`${BASE_URL}/auth`, {

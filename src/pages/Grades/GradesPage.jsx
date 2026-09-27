@@ -1,27 +1,29 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { lkService, formatDisplayDate, parseLessonDate, isPastDate, cacheService } from '../../api';
+import { lkService, cacheService } from '../../api';
 import { Card } from '../../components/common/Card';
+import { Badge } from '../../components/common/Badge';
 import { Icons } from '../../components/common/Icons';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
-import { ErrorMessage } from '../../components/common/ErrorMessage';
 
-// Helper for grade pill styling matching Flutter and the new dark palette
-function getGradeStyle(grade) {
-  switch (Number(grade)) {
-    case 5:
-      return 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30';
-    case 4:
-      return 'bg-sky-500/15 text-sky-600 dark:text-sky-400 border-sky-500/30';
-    case 3:
-      return 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30';
-    case 2:
-      return 'bg-rose-500/15 text-rose-600 dark:text-rose-400 border-rose-500/30';
-    default:
-      return 'bg-slate-500/15 text-slate-600 dark:text-slate-400 border-slate-500/30';
-  }
-}
+const getScoreColor = (score) => {
+  const num = parseFloat(score);
+  if (isNaN(num)) return 'text-textMuted dark:text-[#8E98A8]';
+  if (num >= 85) return 'text-emerald-500 dark:text-emerald-400';
+  if (num >= 70) return 'text-primary dark:text-[#38BDF8]';
+  if (num >= 60) return 'text-amber-500 dark:text-amber-400';
+  return 'text-rose-500 dark:text-rose-400';
+};
+
+const getScoreBadgeVariant = (score) => {
+  const num = parseFloat(score);
+  if (isNaN(num)) return 'default';
+  if (num >= 85) return 'success';
+  if (num >= 70) return 'primary';
+  if (num >= 60) return 'warning';
+  return 'danger';
+};
 
 export const GradesPage = () => {
   const { user, isCollege } = useAuth();
@@ -67,7 +69,7 @@ export const GradesPage = () => {
   const [error, setError] = useState(null);
 
   // Load current active semester progress details via getProgressWithLessons
-  const loadGradesData = async () => {
+  const loadGradesData = async ({ forceRefresh = false } = {}) => {
     const cachedData = getCachedProgress();
     if (cachedData && Array.isArray(cachedData.disciplines) && cachedData.disciplines.length > 0) {
       setDisciplines(cachedData.disciplines);
@@ -77,17 +79,17 @@ export const GradesPage = () => {
       });
       setSemesterSummary({
         avgScore: cachedData.gpa || '—',
-        isAdmitted: cachedData.isAdmitted !== undefined ? cachedData.isAdmitted : true,
+        isAdmitted: cachedData.isAdmitted !== undefined ? Boolean(cachedData.isAdmitted) : (Number(cachedData.unadmittedCount || 0) === 0),
         unadmittedCount: cachedData.unadmittedCount || 0,
         totalPasses: cachedData.passes !== undefined ? cachedData.passes : 0,
-        totalGradesCount: cachedData.totalGradesCount || 0,
+        totalGradesCount: cachedData.totalGradesCount || (Array.isArray(cachedData.disciplines) ? cachedData.disciplines.reduce((sum, d) => sum + (d.grades?.length || 0), 0) : 0),
         gradeDistribution: cachedData.gradeDistribution || {}
       });
       setIsLoading(false);
     }
 
     try {
-      const data = await lkService.getProgressWithLessons(user);
+      const data = await lkService.getProgressWithLessons(user, { forceRefresh });
 
       if (data && Array.isArray(data.disciplines) && data.disciplines.length > 0) {
         setDisciplines(data.disciplines);
@@ -97,10 +99,10 @@ export const GradesPage = () => {
         });
         setSemesterSummary({
           avgScore: data.gpa || '—',
-          isAdmitted: data.isAdmitted !== undefined ? data.isAdmitted : true,
+          isAdmitted: data.isAdmitted !== undefined ? Boolean(data.isAdmitted) : (Number(data.unadmittedCount || 0) === 0),
           unadmittedCount: data.unadmittedCount || 0,
           totalPasses: data.passes !== undefined ? data.passes : 0,
-          totalGradesCount: data.totalGradesCount || 0,
+          totalGradesCount: data.totalGradesCount || (Array.isArray(data.disciplines) ? data.disciplines.reduce((sum, d) => sum + (d.grades?.length || 0), 0) : 0),
           gradeDistribution: data.gradeDistribution || {}
         });
         setIsOfflineCached(false);
@@ -121,13 +123,9 @@ export const GradesPage = () => {
   useEffect(() => {
     loadGradesData();
 
+    // Pull-to-refresh safely triggers network refresh without wiping offline cache
     const handlePull = () => {
-      const activeCourse = Number(user?.course || 1);
-      const activeSem = Number(user?.semester || 1);
-      cacheService.remove(`progress_with_lessons_c${activeCourse}_s${activeSem}`);
-      cacheService.remove("progress_with_lessons_latest");
-      cacheService.remove("progress_list");
-      loadGradesData();
+      loadGradesData({ forceRefresh: true });
     };
 
     window.addEventListener("app-pull-to-refresh", handlePull);
@@ -144,391 +142,396 @@ export const GradesPage = () => {
       {isOfflineCached && (
         <div className="p-3.5 bg-amber-50 dark:bg-[#34251B] border border-amber-200 dark:border-[#4A3323] rounded-2xl flex items-center justify-between text-xs text-amber-800 dark:text-[#E5983A]">
           <div className="flex items-center space-x-2">
-            <Icons.AlertCircle size={16} className="text-amber-600 dark:text-[#E5983A] shrink-0" />
-            <span>Официальный сайт МГЮА недоступен. Отображаются сохранённые данные из локального кэша.</span>
+            <Icons.CloudOff className="w-4 h-4 shrink-0" />
+            <span>Офлайн-режим: отображаются последние сохранённые данные успеваемости</span>
           </div>
           <button
-            onClick={loadGradesData}
-            className="px-3 py-1 bg-amber-200/60 dark:bg-[#4A3323] rounded-xl font-bold hover:opacity-80 transition-opacity"
+            onClick={() => loadGradesData({ forceRefresh: true })}
+            className="font-bold underline ml-2 hover:opacity-80 cursor-pointer"
           >
-            Обновить
+            Повторить
           </button>
         </div>
       )}
 
-      {/* Header with Switcher to Recordbook */}
+      {/* Header & Controls */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black text-dark dark:text-white">Текущая успеваемость</h1>
-          <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-0.5">
-            {currentSemesterInfo ? (
-              <span className="font-semibold text-primary dark:text-[#38BDF8]">
-                {currentSemesterInfo.course} курс, {currentSemesterInfo.semester} семестр (текущий) •{' '}
-              </span>
-            ) : null}
-            {isCollege
-              ? 'Оценки за занятия, посещаемость и допуск к сессии'
-              : 'Оценки за занятия, баллы модулей БАРС и допуск к сессии'}
+          <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-1">
+            {isCollege ? 'Оценки за текущие занятия и пропуски' : 'Балльно-рейтинговая система (БАРС) и темы занятий'}
+            {currentSemesterInfo && ` • ${currentSemesterInfo.course} курс, ${currentSemesterInfo.semester} семестр`}
           </p>
         </div>
-
-        <button
-          onClick={() => navigate('/recordbook')}
-          className="inline-flex items-center space-x-2 px-4 py-2 rounded-xl bg-card dark:bg-[#1F2430] border border-border dark:border-[#2B3242] text-dark dark:text-white text-xs font-bold hover:bg-bg dark:hover:bg-[#262D3D] transition-colors self-start sm:self-auto shadow-sm"
-        >
-          <Icons.BookOpen size={16} />
-          <span>Зачётная книжка →</span>
-        </button>
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={() => navigate('/recordbook')}
+            className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-surface dark:bg-[#1A1F2C] border border-border dark:border-[#2B3242] text-xs font-semibold text-textMuted hover:text-dark dark:hover:text-white transition-all cursor-pointer"
+          >
+            <Icons.BookOpen className="w-4 h-4" />
+            <span>Зачётка</span>
+          </button>
+          <button
+            onClick={() => loadGradesData({ forceRefresh: true })}
+            disabled={isLoading}
+            className="p-2 rounded-xl bg-surface dark:bg-[#1A1F2C] border border-border dark:border-[#2B3242] text-textMuted hover:text-dark dark:hover:text-white transition-all disabled:opacity-50 cursor-pointer"
+            title="Обновить данные"
+          >
+            <Icons.RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
       </div>
 
-      {/* Key Semester Metrics: GPA, Admission Status, Absences */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {/* 1. Средний балл */}
-        <Card className="p-4 flex flex-col justify-between dark:bg-[#1F2430] dark:border-[#2B3242]">
-          <div className="flex items-center space-x-3">
-            <div className="w-12 h-12 rounded-2xl bg-secondary/10 dark:bg-[#1E6685]/20 text-secondary dark:text-[#38BDF8] flex items-center justify-center shrink-0">
-              <Icons.GraduationCap size={26} />
-            </div>
-            <div>
-              <span className="text-xs font-medium text-textMuted dark:text-[#8E98A8]">Текущий средний балл</span>
-              <p className="text-2xl font-black text-secondary dark:text-[#38BDF8]">{semesterSummary.avgScore}</p>
-            </div>
+      {/* KPI Stats Overview Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        {/* GPA / BARS Score */}
+        <Card className="p-4 sm:p-5 flex items-center space-x-3 sm:space-x-4 border border-border dark:border-[#2B3242]">
+          <div className="p-3 rounded-2xl bg-primary/10 text-primary dark:text-[#38BDF8] shrink-0">
+            <Icons.Award className="w-5 h-5 sm:w-6 sm:h-6" />
           </div>
-
-          {semesterSummary.totalGradesCount > 0 && (
-            <div className="flex items-center space-x-2 mt-3 pt-3 border-t border-border/60 dark:border-[#2B3242] text-xs">
-              <span className="text-textMuted dark:text-[#8E98A8] font-medium">Всего оценок: {semesterSummary.totalGradesCount}</span>
-              <div className="flex items-center space-x-1 ml-auto">
-                {[5, 4, 3, 2].map(g => {
-                  const count = semesterSummary.gradeDistribution[g];
-                  if (!count) return null;
-                  return (
-                    <span
-                      key={g}
-                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${getGradeStyle(g)}`}
-                    >
-                      {g}: {count}
-                    </span>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </Card>
-
-        {/* 2. Статус допуска к сессии */}
-        <Card className="p-4 flex items-center space-x-3 dark:bg-[#1F2430] dark:border-[#2B3242]">
-          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${
-            semesterSummary.isAdmitted
-              ? 'bg-emerald-100 text-emerald-600 dark:bg-[#142E25] dark:text-[#34D399]'
-              : 'bg-amber-100 text-amber-600 dark:bg-[#34251B] dark:text-[#E5983A]'
-          }`}>
-            {semesterSummary.isAdmitted ? <Icons.CheckCircle size={26} /> : <Icons.AlertCircle size={26} />}
-          </div>
-          <div className="min-w-0">
-            <span className="text-xs font-medium text-textMuted dark:text-[#8E98A8]">Статус допуска к сессии</span>
-            <p className={`text-sm font-black truncate ${
-              semesterSummary.isAdmitted ? 'text-emerald-600 dark:text-[#34D399]' : 'text-amber-600 dark:text-[#E5983A]'
-            }`}>
-              {semesterSummary.isAdmitted
-                ? '✓ Допущен к сессии'
-                : `× Нет допуска (${semesterSummary.unadmittedCount})`}
+          <div>
+            <p className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-textMuted dark:text-[#8E98A8]">
+              {isCollege ? 'Средний балл' : 'Рейтинг / Ср. балл'}
+            </p>
+            <p className="text-xl sm:text-2xl font-black text-dark dark:text-white mt-0.5">
+              {semesterSummary.avgScore}
             </p>
           </div>
         </Card>
 
-        {/* 3. Пропуски */}
-        <Card className="p-4 flex items-center space-x-3 dark:bg-[#1F2430] dark:border-[#2B3242]">
-          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${
-            semesterSummary.totalPasses > 0
-              ? 'bg-amber-100 text-amber-600 dark:bg-[#34251B] dark:text-[#E5983A]'
-              : 'bg-emerald-100 text-emerald-600 dark:bg-[#142E25] dark:text-[#34D399]'
-          }`}>
-            <Icons.Calendar size={26} />
+        {/* Exam Admission */}
+        <Card className="p-4 sm:p-5 flex items-center space-x-3 sm:space-x-4 border border-border dark:border-[#2B3242]">
+          <div className={`p-3 rounded-2xl shrink-0 ${semesterSummary.isAdmitted ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-rose-500/10 text-rose-600 dark:text-rose-400'}`}>
+            {semesterSummary.isAdmitted ? <Icons.CheckCircle2 className="w-5 h-5 sm:w-6 sm:h-6" /> : <Icons.AlertCircle className="w-5 h-5 sm:w-6 sm:h-6" />}
           </div>
           <div>
-            <span className="text-xs font-medium text-textMuted dark:text-[#8E98A8]">{isCollege ? "Пропущено пар" : "Пропуски за семестр"}</span>
-            <p className={`text-2xl font-black ${
-              semesterSummary.totalPasses > 0 ? 'text-amber-600 dark:text-[#E5983A]' : 'text-emerald-600 dark:text-[#34D399]'
-            }`}>
+            <p className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-textMuted dark:text-[#8E98A8]">
+              Допуск к сессии
+            </p>
+            <p className={`text-sm sm:text-base font-bold mt-0.5 ${semesterSummary.isAdmitted ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+              {semesterSummary.isAdmitted ? 'Допущен' : `Недопусков: ${semesterSummary.unadmittedCount}`}
+            </p>
+          </div>
+        </Card>
+
+        {/* Missed Lessons (Passes) */}
+        <Card className="p-4 sm:p-5 flex items-center space-x-3 sm:space-x-4 border border-border dark:border-[#2B3242]">
+          <div className={`p-3 rounded-2xl shrink-0 ${semesterSummary.totalPasses > 0 ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400' : 'bg-primary/10 text-primary dark:text-[#38BDF8]'}`}>
+            <Icons.Clock className="w-5 h-5 sm:w-6 sm:h-6" />
+          </div>
+          <div>
+            <p className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-textMuted dark:text-[#8E98A8]">
+              {isCollege ? 'Пропущено пар' : 'Пропуски (акад. ч)'}
+            </p>
+            <p className="text-xl sm:text-2xl font-black text-dark dark:text-white mt-0.5">
               {semesterSummary.totalPasses}
             </p>
           </div>
         </Card>
+
+        {/* Total Grades / Points Received */}
+        <Card className="p-4 sm:p-5 flex items-center space-x-3 sm:space-x-4 border border-border dark:border-[#2B3242]">
+          <div className="p-3 rounded-2xl bg-secondary/10 text-secondary shrink-0">
+            <Icons.CheckSquare className="w-5 h-5 sm:w-6 sm:h-6" />
+          </div>
+          <div>
+            <p className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-textMuted dark:text-[#8E98A8]">
+              {isCollege ? 'Оценок получено' : 'Дисциплин в курсе'}
+            </p>
+            <p className="text-xl sm:text-2xl font-black text-dark dark:text-white mt-0.5">
+              {isCollege ? semesterSummary.totalGradesCount : disciplines.length}
+            </p>
+          </div>
+        </Card>
       </div>
 
-      {/* Disciplines In-Progress List */}
+      {/* Main Content Area */}
       {isLoading ? (
-        <Card className="p-12 text-center dark:bg-[#1F2430] dark:border-[#2B3242]">
-          <LoadingSpinner size={10} text="Получение текущих оценок и баллов..." />
+        <div className="py-20 flex justify-center">
+          <LoadingSpinner size={10} text="Загрузка подробной успеваемости..." />
+        </div>
+      ) : error && disciplines.length === 0 ? (
+        <Card className="p-8 text-center border border-border dark:border-[#2B3242]">
+          <Icons.AlertCircle className="w-12 h-12 text-rose-500 mx-auto mb-3 opacity-80" />
+          <h3 className="font-bold text-dark dark:text-white mb-1">Ошибка загрузки успеваемости</h3>
+          <p className="text-xs text-textMuted dark:text-[#8E98A8] mb-4">{error}</p>
+          <button
+            onClick={() => loadGradesData({ forceRefresh: true })}
+            className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow hover:bg-primary/90 transition-all cursor-pointer"
+          >
+            Попробовать снова
+          </button>
         </Card>
-      ) : error ? (
-        <ErrorMessage message={error} onRetry={loadGradesData} />
       ) : disciplines.length === 0 ? (
-        <Card className="p-12 text-center dark:bg-[#1F2430] dark:border-[#2B3242]">
-          <div className="w-16 h-16 rounded-full bg-accent/10 dark:bg-[#22869A]/20 mx-auto flex items-center justify-center text-accent dark:text-[#22869A] mb-4">
-            <Icons.GraduationCap size={32} />
-          </div>
-          <h3 className="text-lg font-bold text-dark dark:text-white">
-            Нет данных об успеваемости за {currentSemesterInfo ? `${currentSemesterInfo.semester} семестр` : 'текущий семестр'}
-          </h3>
+        <Card className="p-12 text-center border border-border dark:border-[#2B3242]">
+          <Icons.Inbox className="w-12 h-12 text-textMuted dark:text-[#8E98A8] mx-auto mb-3 opacity-30" />
+          <h3 className="font-bold text-dark dark:text-white">Нет данных об успеваемости</h3>
           <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-1">
-            Текущие баллы БАРС и оценки отображаются по мере внесения преподавателями.
+            Для выбранного семестра информация ещё не внесена преподавателями
           </p>
         </Card>
       ) : (
-        <div className="space-y-3.5">
-          {disciplines.map((disc, idx) => {
-            const isExpanded = expandedDiscipline === disc.name;
-            const hasAccess = disc.access;
-            const hasGrades = Array.isArray(disc.grades) && disc.grades.length > 0;
-            const hasModuleScores = Array.isArray(disc.moduleScores) && disc.moduleScores.length > 0;
+        <div className="space-y-4">
+          <div className="flex items-center justify-between px-1">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-textMuted dark:text-[#8E98A8]">
+              Список дисциплин ({disciplines.length})
+            </h2>
+            <span className="text-[11px] text-textMuted dark:text-[#8E98A8]">
+              Нажмите на предмет для просмотра деталей
+            </span>
+          </div>
 
-            return (
-              <Card
-                key={disc.id || idx}
-                className={`p-5 transition-all cursor-pointer dark:bg-[#1F2430] dark:border-[#2B3242] ${
-                  !hasAccess ? 'border-amber-400 dark:border-[#4A3323]' : 'hover:border-accent dark:hover:border-[#22869A]/70'
-                }`}
-                onClick={() => toggleExpand(disc.name)}
-              >
-                {/* Header of Card */}
-                <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
-                  <div className="flex-1 min-w-[240px]">
-                    <h3 className="font-bold text-base sm:text-lg text-dark dark:text-white leading-tight">
-                      {disc.name}
-                    </h3>
-                    {disc.info && (
-                      <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-1 font-normal leading-relaxed">
-                        {disc.info}
-                      </p>
-                    )}
-                    {Array.isArray(disc.professors) && disc.professors.length > 0 && !disc.info && (
-                      <p className="text-xs text-textMuted dark:text-[#8E98A8] mt-1">
-                        {disc.professors.join(', ')}
-                      </p>
-                    )}
-                  </div>
+          <div className="grid grid-cols-1 gap-3">
+            {disciplines.map((disc, idx) => {
+              const isExpanded = expandedDiscipline === disc.name;
+              const hasAccess = disc.access !== false && disc.isAdmitted !== false;
+              const hasModules = Array.isArray(disc.modules) && disc.modules.length > 0;
+              const hasModuleScores = Array.isArray(disc.moduleScores) && disc.moduleScores.length > 0;
+              const hasGrades = Array.isArray(disc.grades) && disc.grades.length > 0;
 
-                  {/* Admission Status Tag & Score Badge */}
-                  <div className="flex items-center space-x-2 shrink-0">
-                    {hasAccess ? (
-                      <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-[#142E25] dark:text-[#34D399] dark:border-[#1F543D]">
-                        ✓ Допуск
-                      </span>
-                    ) : (
-                      <span className="px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 dark:bg-[#34251B] dark:text-[#E5983A] dark:border-[#4A3323]">
-                        × Нет допуска
-                      </span>
-                    )}
-
-                    {disc.avgGrade ? (
-                      <span className="px-2.5 py-1 rounded-xl text-xs font-black bg-secondary dark:bg-[#1E6685] text-white shadow-sm">
-                        {disc.avgGrade} ср.
-                      </span>
-                    ) : disc.barsScore ? (
-                      <span className="px-2.5 py-1 rounded-xl text-xs font-black bg-secondary dark:bg-[#1E6685] text-white shadow-sm">
-                        {disc.barsScore} б.
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
-
-                {/* BOTTOM ROW: QUICK-DISPLAY MODULE SCORES, COLLEGE LESSON STATS, GRADES & ABSENCES */}
-                {(hasModuleScores || hasGrades || disc.passes > 0 || (disc.flawGrape > 0 && !hasAccess) || disc.countPractice > 0) && (
-                  <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-border/80 dark:border-[#2B3242]/70">
-                    {/* Module Scores Pills (Bachelor) */}
-                    {hasModuleScores && disc.moduleScores.map((mod, mIdx) => (
-                      <div
-                        key={mIdx}
-                        className="flex items-center space-x-1.5 px-3 py-1 rounded-xl bg-bg dark:bg-[#181C26] border border-border dark:border-[#2B3242] text-xs"
-                      >
-                        <span className="font-semibold text-textMuted dark:text-[#8E98A8]">{mod.name}:</span>
-                        <span className="font-bold text-dark dark:text-white">{mod.score} б.</span>
+              return (
+                <Card
+                  key={disc.id || idx}
+                  className={`border transition-all overflow-hidden ${
+                    isExpanded
+                      ? 'border-primary/50 dark:border-[#1E6685] shadow-md'
+                      : 'border-border dark:border-[#2B3242] hover:border-primary/30'
+                  }`}
+                >
+                  {/* Discipline Header Row */}
+                  <div
+                    onClick={() => toggleExpand(disc.name)}
+                    className="p-4 sm:p-5 flex items-start justify-between gap-3 cursor-pointer select-none"
+                  >
+                    <div className="space-y-1.5 flex-1 min-w-0">
+                      <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+                        <Badge variant="outline" size="sm" className="font-semibold text-[10px]">
+                          {disc.type || 'Дисциплина'}
+                        </Badge>
+                        <Badge
+                          variant={hasAccess ? 'success' : 'danger'}
+                          size="sm"
+                          className="font-bold text-[10px]"
+                        >
+                          {hasAccess ? 'Допуск' : 'Недопуск'}
+                        </Badge>
+                        {disc.barsScore && (
+                          <Badge variant={getScoreBadgeVariant(disc.barsScore)} size="sm" className="font-bold text-[10px]">
+                            {disc.barsScore} б.
+                          </Badge>
+                        )}
+                        {disc.avgGrade && (
+                          <Badge variant={getScoreBadgeVariant(Number(disc.avgGrade) * 20)} size="sm" className="font-bold text-[10px]">
+                            Ср. {disc.avgGrade}
+                          </Badge>
+                        )}
                       </div>
-                    ))}
 
-                    {/* Non-zero Received Lesson Grades */}
-                    {hasGrades && (
-                      <div className="flex items-center space-x-1.5 ml-1">
-                        <span className="text-xs font-bold text-textMuted dark:text-[#8E98A8]">Оценки:</span>
-                        <div className="flex flex-wrap gap-1">
-                          {disc.grades.map((g, gIdx) => (
+                      <h3 className="text-sm sm:text-base font-bold text-dark dark:text-white leading-snug">
+                        {disc.name}
+                      </h3>
+
+                      {/* Professors */}
+                      {Array.isArray(disc.professors) && disc.professors.length > 0 && (
+                        <div className="flex items-center space-x-1.5 text-xs text-textMuted dark:text-[#8E98A8]">
+                          <Icons.User className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate">{disc.professors.join(', ')}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center space-x-3 shrink-0 pt-1">
+                      {/* BARS Score or College Average */}
+                      <div className="text-right">
+                        <p className={`text-base sm:text-lg font-black ${getScoreColor(disc.barsScore || (disc.avgGrade ? Number(disc.avgGrade) * 20 : null))}`}>
+                          {disc.barsScore ? `${disc.barsScore} б.` : (disc.avgGrade || '—')}
+                        </p>
+                        <p className="text-[10px] text-textMuted dark:text-[#8E98A8]">
+                          {disc.barsScore ? 'Итого БАРС' : 'Оценка'}
+                        </p>
+                      </div>
+
+                      <div className={`p-1.5 rounded-xl bg-bg dark:bg-[#12151B] text-textMuted transition-transform duration-200 ${isExpanded ? 'rotate-180 text-primary dark:text-[#38BDF8]' : ''}`}>
+                        <Icons.ChevronDown className="w-4 h-4" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Summary Micro-Badges Bar */}
+                  {(hasModuleScores || hasGrades || disc.passes > 0 || (disc.flawGrape > 0 && !hasAccess) || disc.countPractice > 0) && (
+                    <div className="px-4 sm:px-5 pb-3 pt-0 flex flex-wrap items-center gap-2 text-xs">
+                      {/* BARS Modules breakdown */}
+                      {hasModuleScores && disc.moduleScores.map((m, mIdx) => (
+                        <span
+                          key={mIdx}
+                          className="px-2 py-0.5 rounded-lg bg-bg dark:bg-[#12151B] border border-border dark:border-[#2B3242] text-[11px] font-semibold text-textMuted dark:text-[#8E98A8]"
+                        >
+                          {m.name}: <strong className={getScoreColor(m.score)}>{m.score} б.</strong>
+                        </span>
+                      ))}
+
+                      {/* College Grades chips */}
+                      {hasGrades && (
+                        <div className="flex items-center space-x-1">
+                          <span className="text-[11px] text-textMuted dark:text-[#8E98A8]">Оценки:</span>
+                          {disc.grades.slice(0, 5).map((g, gIdx) => (
                             <span
                               key={gIdx}
-                              className={`w-6 h-6 flex items-center justify-center rounded-lg text-xs font-black border ${getGradeStyle(g)}`}
+                              className={`w-5 h-5 rounded-md flex items-center justify-center font-bold text-[11px] ${
+                                g >= 4
+                                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                                  : g === 3
+                                    ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                                    : 'bg-rose-500/10 text-rose-600 dark:text-rose-400'
+                              }`}
                             >
                               {g}
                             </span>
                           ))}
+                          {disc.grades.length > 5 && (
+                            <span className="text-[10px] text-textMuted">+{disc.grades.length - 5}</span>
+                          )}
                         </div>
-                      </div>
-                    )}
+                      )}
 
-                    {/* College: FlawGrape (missing positive grades needed for admission) */}
-                    {disc.flawGrape > 0 && !hasAccess && (
-                      <div className="flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-amber-50 dark:bg-[#34251B] text-amber-700 dark:text-[#E5983A] border border-amber-200 dark:border-[#4A3323] text-xs font-semibold">
-                        <span>Не хватает оценок: {disc.flawGrape}</span>
-                      </div>
-                    )}
+                      {/* Passes (Absences) badge */}
+                      {disc.passes > 0 && (
+                        <span className="px-2 py-0.5 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 font-semibold text-[11px] flex items-center space-x-1">
+                          <Icons.Clock className="w-3 h-3" />
+                          <span>{isCollege ? `Пропущено: ${disc.passes} пар` : `Пропуски: ${disc.passes}`}</span>
+                        </span>
+                      )}
 
-                    {/* College: CountPractice (number of practical classes) */}
-                    {disc.countPractice > 0 && (
-                      <div className="flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-bg dark:bg-[#181C26] border border-border dark:border-[#2B3242] text-xs font-semibold text-textMuted dark:text-[#8E98A8]">
-                        <span>Практик: {disc.countPractice}</span>
-                      </div>
-                    )}
-
-                    {/* Absence Tag */}
-                    {disc.passes > 0 && (
-                      <div className="flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-amber-50 dark:bg-[#34251B] text-amber-700 dark:text-[#E5983A] border border-amber-200 dark:border-[#4A3323] text-xs font-semibold ml-auto">
-                        <span>{isCollege ? `Пропущено: ${disc.passes} пар` : `Пропуски: ${disc.passes}`}</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Expanded Detailed View for College (Lessons Journal: Dates, Turnout, Lateness, Ratings) */}
-                {isExpanded && Array.isArray(disc.lessons) && disc.lessons.length > 0 && (
-                  <div className="mt-4 pt-4 border-t border-border/80 dark:border-[#2B3242] space-y-3 animate-in fade-in duration-150">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-textMuted dark:text-[#8E98A8]">
-                        Журнал занятий и оценки
-                      </h4>
-                      <span className="text-[11px] text-textMuted dark:text-[#8E98A8]">
-                        Всего занятий: {disc.lessons.length}
-                      </span>
+                      {/* Practices remaining */}
+                      {disc.countPractice > 0 && (
+                        <span className="px-2 py-0.5 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 font-semibold text-[11px]">
+                          Практик: {disc.countPractice}
+                        </span>
+                      )}
                     </div>
+                  )}
 
-                    <div className="space-y-2 mt-2">
-                      {disc.lessons.map((lesson, lIdx) => {
-                        const ratings = Array.isArray(lesson.ratings) ? lesson.ratings.filter(r => r > 0) : [];
-                        const lessonDate = parseLessonDate(lesson.date);
-                        const isPast = lessonDate && isPastDate(lessonDate);
-                        const isMissed = isPast && !lesson.turnout && ratings.length === 0;
-                        const isPresent = lesson.turnout || ratings.length > 0;
+                  {/* Expanded Discipline Detailed Content */}
+                  {isExpanded && (
+                    <div className="border-t border-border dark:border-[#2B3242] bg-bg/50 dark:bg-[#12151B]/50 p-4 sm:p-5 space-y-4">
+                      {/* Teacher Notes / Debt info */}
+                      {disc.info && (
+                        <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-700 dark:text-amber-400">
+                          <strong className="font-bold">Информация кафедры: </strong>
+                          {disc.info}
+                        </div>
+                      )}
 
-                        return (
-                          <div
-                            key={lIdx}
-                            className="flex items-center justify-between p-3 rounded-xl bg-bg dark:bg-[#181C26] border border-border/80 dark:border-[#2B3242] text-xs gap-3"
-                          >
-                            <div className="flex items-center space-x-3 min-w-0">
-                              <span className="font-bold text-dark dark:text-white shrink-0">
-                                {formatDisplayDate(lesson.date) || lesson.date}
-                              </span>
-                              <div className="min-w-0">
-                                {lesson.teacher && (
-                                  <p className="text-textMuted dark:text-[#8E98A8] truncate">
-                                    {lesson.teacher}
-                                  </p>
-                                )}
-                                {lesson.subgroup ? (
-                                  <p className="text-[10px] text-textMuted dark:text-[#8E98A8]">
-                                    Подгруппа {lesson.subgroup}
-                                  </p>
-                                ) : null}
-                              </div>
-                            </div>
-
-                            <div className="flex items-center space-x-2 shrink-0">
-                              {lesson.lateness && (
-                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-600 dark:text-[#E5983A] border border-amber-500/30">
-                                  Опоздание
+                      {/* BARS Modules & Lesson Themes */}
+                      {hasModules ? (
+                        <div className="space-y-4">
+                          {disc.modules.map((module, modIdx) => (
+                            <div
+                              key={modIdx}
+                              className="rounded-2xl bg-surface dark:bg-[#1A1F2C] border border-border dark:border-[#2B3242] p-3.5 space-y-3"
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="font-bold text-xs text-dark dark:text-white flex items-center space-x-2">
+                                  <span className="w-2 h-2 rounded-full bg-primary" />
+                                  <span>{module.module || module.name || `Блок модулей #${modIdx + 1}`}</span>
                                 </span>
-                              )}
+                                {(module.mediumScore !== undefined || module.score !== undefined) && (
+                                  <span className="text-xs font-bold text-primary dark:text-[#38BDF8]">
+                                    Балл: {module.mediumScore ?? module.score}
+                                  </span>
+                                )}
+                              </div>
 
-                              {ratings.length > 0 ? (
-                                <div className="flex space-x-1">
-                                  {ratings.map((r, rIdx) => (
-                                    <span
-                                      key={rIdx}
-                                      className={`w-6 h-6 flex items-center justify-center rounded-lg text-xs font-black border ${getGradeStyle(r)}`}
+                              {/* Themes / Lessons breakdown inside module */}
+                              {Array.isArray(module.themes) && module.themes.length > 0 ? (
+                                <div className="space-y-2">
+                                  {module.themes.map((theme, thIdx) => (
+                                    <div
+                                      key={thIdx}
+                                      className="p-2.5 rounded-xl bg-bg dark:bg-[#12151B] border border-border/50 dark:border-[#2B3242]/50 space-y-1.5"
                                     >
-                                      {r}
-                                    </span>
+                                      <div className="flex items-center justify-between text-xs">
+                                        <span className="font-semibold text-dark dark:text-white line-clamp-1">
+                                          {theme.theme || theme.name || `Тема ${thIdx + 1}`}
+                                        </span>
+                                        {theme.date && (
+                                          <span className="text-[10px] text-textMuted dark:text-[#8E98A8] shrink-0 ml-2">
+                                            {theme.date}
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      {/* Individual lesson items / points inside theme */}
+                                      {Array.isArray(theme.items) && theme.items.length > 0 && (
+                                        <div className="space-y-1 pt-1">
+                                          {theme.items.map((it, itIdx) => {
+                                            const isAbsent = it.missed === 1 || it.missed === '1' || it.turnout === false;
+                                            return (
+                                              <div
+                                                key={itIdx}
+                                                className="flex items-center justify-between text-[11px] text-textMuted dark:text-[#8E98A8] pl-2 border-l-2 border-primary/30"
+                                              >
+                                                <span className="line-clamp-1">
+                                                  {it.theme || it.name || 'Занятие'}
+                                                  {it.subgroup ? ` (Подгруппа ${it.subgroup})` : ''}
+                                                </span>
+                                                <div className="flex items-center space-x-2 shrink-0 ml-2">
+                                                  {isAbsent && (
+                                                    <span className="text-[10px] font-bold text-rose-500">
+                                                      Пропуск
+                                                    </span>
+                                                  )}
+                                                  {it.ball !== undefined && it.ball !== null && (
+                                                    <span className="font-bold text-dark dark:text-white">
+                                                      {it.ball} б.
+                                                    </span>
+                                                  )}
+                                                </div>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
+                                    </div>
                                   ))}
                                 </div>
-                              ) : isPresent ? (
-                                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-600 dark:text-[#34D399] border border-emerald-500/30">
-                                  Посещено
-                                </span>
-                              ) : isMissed ? (
-                                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/30">
-                                  Пропуск
-                                </span>
                               ) : (
-                                <span className="text-[11px] text-textMuted dark:text-[#8E98A8]">
-                                  Запланировано
-                                </span>
+                                <p className="text-xs text-textMuted dark:text-[#8E98A8] italic">
+                                  Темы занятий пока не внесены преподавателем
+                                </p>
                               )}
                             </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* Expanded Detailed View for Bachelor (Themes, Modules, Seminar Ball) */}
-                {isExpanded && Array.isArray(disc.modules) && disc.modules.length > 0 && (
-                  <div className="mt-4 pt-4 border-t border-border/80 dark:border-[#2B3242] space-y-3 animate-in fade-in duration-150">
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-textMuted dark:text-[#8E98A8]">
-                      Подробности по модулям и занятиям
-                    </h4>
-                    {disc.modules.map((mod, mIdx) => (
-                      <div key={mIdx} className="p-3.5 bg-bg dark:bg-[#181C26] rounded-xl border border-border dark:border-[#2B3242] space-y-2.5">
-                        <div className="flex justify-between items-center text-xs font-bold">
-                          <span className="text-dark dark:text-white">{mod.module || `Модуль ${mIdx + 1}`}</span>
-                          <span className="text-secondary dark:text-[#38BDF8]">{mod.mediumScore || 0} баллов</span>
+                          ))}
                         </div>
-                        {Array.isArray(mod.themes) && mod.themes.map((theme, tIdx) => (
-                          <div key={tIdx} className="text-xs pl-2.5 border-l-2 border-border/80 dark:border-[#2B3242] space-y-1.5">
-                            <p className="font-medium text-dark dark:text-white leading-tight">{theme.theme}</p>
-                            {Array.isArray(theme.items) && theme.items.map((item, itIdx) => {
-                              const validDate = formatDisplayDate(item.date);
-                              const isMissed = item.missed === 1 || item.missed === '1' || item.turnout === false || item.turnout === 'false';
-                              const ball = item.ball;
-
-                              return (
-                                <div key={itIdx} className="flex justify-between items-center text-[11px] text-textMuted dark:text-[#8E98A8] pt-0.5">
-                                  <span>{validDate ? validDate : 'Семинар'}</span>
-                                  <div>
-                                    {isMissed ? (
-                                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-600 dark:text-[#E5983A] border border-amber-500/30">
-                                        Пропуск
-                                      </span>
-                                    ) : ball > 0 ? (
-                                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getGradeStyle(ball)}`}>
-                                        {ball} б.
-                                      </span>
-                                    ) : (
-                                      <span className="text-textMuted dark:text-[#8E98A8]">—</span>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })}
+                      ) : (
+                        <div className="space-y-2">
+                          <p className="text-xs text-textMuted dark:text-[#8E98A8]">
+                            Подробные данные о занятиях и БАРС для данной дисциплины:
+                          </p>
+                          <div className="p-3 rounded-xl bg-surface dark:bg-[#1A1F2C] border border-border dark:border-[#2B3242] flex items-center justify-between text-xs">
+                            <span className="text-textMuted dark:text-[#8E98A8]">Статус допуска:</span>
+                            <span className={`font-bold ${hasAccess ? 'text-emerald-500' : 'text-rose-500'}`}>
+                              {hasAccess ? 'Допущен к аттестации' : 'Не допущен'}
+                            </span>
                           </div>
-                        ))}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* If expanded and neither modules nor lessons found */}
-                {isExpanded && (!disc.modules?.length && !disc.lessons?.length) && (
-                  <div className="mt-4 pt-4 border-t border-border/80 dark:border-[#2B3242] text-center py-2">
-                    <p className="text-xs text-textMuted dark:text-[#8E98A8]">
-                      Нет детальных записей о занятиях по этой дисциплине
-                    </p>
-                  </div>
-                )}
-              </Card>
-            );
-          })}
+                          {disc.barsScore && (
+                            <div className="p-3 rounded-xl bg-surface dark:bg-[#1A1F2C] border border-border dark:border-[#2B3242] flex items-center justify-between text-xs">
+                              <span className="text-textMuted dark:text-[#8E98A8]">Текущий балл БАРС:</span>
+                              <span className="font-bold text-primary dark:text-[#38BDF8]">{disc.barsScore} б.</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </Card>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
   );
 };
+
+export default GradesPage;

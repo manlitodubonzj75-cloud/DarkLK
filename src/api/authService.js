@@ -5,7 +5,7 @@ export const authService = {
   /**
    * User login: POST /auth
    * Stores access tokens and securely saves encrypted credentials in AES-GCM vault.
-   * Note: The response payload already contains full student data (role, speciality, group, etc).
+   * Automatically pre-warms Exchange mail session with zero friction.
    */
   async login(username, password) {
     const data = await apiClient('/auth', {
@@ -16,10 +16,20 @@ export const authService = {
 
     if (data && data.access_token) {
       cryptoStorage.setTokens(data.access_token, data.refresh_token || null);
-      cryptoStorage.setSavedCredentials(username, password);
+      cryptoStorage.saveCredentials(username, password);
 
       // Cache user from POST /auth response right away
       this.cacheUser(data);
+
+      // Pre-warm / login to Exchange Mail silently in background
+      try {
+        import('./mailService.js').then(({ mailService }) => {
+          mailService.login(username, password).catch((err) => {
+            console.warn('[AuthService] Background mail login warning:', err.message);
+          });
+        }).catch(() => {});
+      } catch (_) {}
+
       return { ...data, user: data };
     }
 
@@ -61,6 +71,10 @@ export const authService = {
       console.warn('Logout request warning:', e.message);
     } finally {
       await cryptoStorage.purgeAll();
+      try {
+        const { mailService } = await import('./mailService.js');
+        await mailService.logout();
+      } catch (_) {}
     }
   },
 
@@ -87,7 +101,7 @@ export const authService = {
     await cryptoStorage.init();
 
     const token = cryptoStorage.getToken() || localStorage.getItem('access_token') || localStorage.getItem('token');
-    const { login: savedLogin, password: savedPassword } = cryptoStorage.getSavedCredentials();
+    const { login: savedLogin, password: savedPassword } = await cryptoStorage.getSavedCredentialsAsync();
     const offlineUser = this.getCachedUser();
 
     // If there is no token and no saved credentials, user is not authenticated
@@ -138,9 +152,9 @@ export const authService = {
       }
     }
 
-    // 3. Fallback: keep user logged in with offline profile if available
+    // 3. Fallback: if server is temporarily unreachable, grant access with cached profile
     if (offlineUser) {
-      return { user: offlineUser, token: token || 'offline', isOffline: isDeviceOffline };
+      return { user: offlineUser, token: token || 'cached', isOffline: true };
     }
 
     return null;

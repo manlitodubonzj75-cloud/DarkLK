@@ -101,12 +101,9 @@ export const ConsultationsPage = () => {
     loadDisciplinesAndThemes();
   }, [loadDisciplinesAndThemes]);
 
-  // Pull-to-refresh listener
+  // Pull-to-refresh listener without wiping cache
   useEffect(() => {
     const handlePull = () => {
-      cacheService.remove("consultation_student_list");
-      cacheService.remove("student_disciplines");
-      cacheService.remove("consultation_themes");
       loadMyConsultations();
       loadDisciplinesAndThemes();
     };
@@ -281,7 +278,7 @@ export const ConsultationsPage = () => {
           disabled={loadingMy}
           className="text-xs font-semibold text-secondary dark:text-[#38BDF8] hover:underline flex items-center space-x-1"
         >
-          <Icons.Refresh size={13} className={loadingMy ? 'animate-spin' : ''} />
+          <Icons.RefreshCw size={13} className={loadingMy ? 'animate-spin' : ''} />
           <span>Обновить</span>
         </button>
       </div>
@@ -587,3 +584,5 @@ export const ConsultationsPage = () => {
     </div>
   );
 };
+
+export default ConsultationsPage;

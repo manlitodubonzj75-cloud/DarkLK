@@ -80,6 +80,7 @@
     }
   },
   "dependencies": {
+    "@capacitor/core": "^7.0.1",
     "@capacitor/ios": "^7.6.9",
     "lucide-react": "^1.45.0",
     "react": "^18.2.0",
@@ -89,7 +90,6 @@
   "devDependencies": {
     "@capacitor/android": "^7.0.1",
     "@capacitor/cli": "^7.0.1",
-    "@capacitor/core": "^7.0.1",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "@vitejs/plugin-react": "^4.2.0",

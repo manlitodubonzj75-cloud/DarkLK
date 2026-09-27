@@ -1,64 +1,62 @@
 /**
- * DarkMSAL - OWA Service Layer (Exchange 2016 API)
- *
- * Implements high-level email operations over JSON-RPC:
- * - getFolders(): Inbox, Sent, Drafts, Deleted Items
- * - getConversations(): modern conversation grouping with FindItem fallback
- * - getMessage(): retrieve full email details, HTML body, attachments
- * - sendEmail(): compose and send messages
- * - deleteItem(): move to trash or purge
+ * Exchange Web Services (EWS) / OWA JSON-RPC Mail API Service
+ * Handles Mail folders, Conversations, Item details, and Attachment downloading.
  */
-
-import { mailClient } from './mailClient.js';
-
-export const DISTINGUISHED_FOLDERS = [
-  { id: 'inbox', name: 'Входящие', icon: 'Inbox' },
-  { id: 'sentitems', name: 'Отправленные', icon: 'Send' },
-  { id: 'drafts', name: 'Черновики', icon: 'FileText' },
-  { id: 'deleteditems', name: 'Удалённые', icon: 'Trash2' },
-  { id: 'junkemail', name: 'Нежелательные', icon: 'AlertOctagon' }
-];
+import { mailClient } from './mailClient';
+import { cryptoStorage } from './cryptoStorage';
 
 export const mailService = {
   /**
-   * Log into Exchange OWA
+   * Check if credentials or session cookies exist
    */
-  async login(username, password) {
-    return mailClient.login(username, password);
+  isAuthenticated() {
+    return mailClient.isAuthenticated();
   },
 
   /**
-   * Log out from Exchange OWA
-   */
-  async logout() {
-    return mailClient.logout();
-  },
-
-  /**
-   * Check if current session is authenticated
+   * Check auth and perform silent auto-login if saved LK credentials exist
    */
   async checkAuth() {
-    const creds = await mailClient.getStoredCredentials();
-    if (!creds?.username) {
-      return { isAuthenticated: false, username: null };
+    if (mailClient.canary && mailClient.currentUser) {
+      return { isAuthenticated: true, username: mailClient.currentUser };
     }
 
-    if (!mailClient.canary) {
-      try {
-        await mailClient.reauthenticate();
-      } catch (_) {
-        return { isAuthenticated: false, username: creds.username };
+    try {
+      const saved = await cryptoStorage.getSavedCredentialsAsync();
+      const mailSaved = cryptoStorage.getMailCredentials();
+      const username = mailSaved?.username || saved?.login;
+      const password = mailSaved?.password || saved?.password;
+
+      if (username && password) {
+        await mailClient.login(username, password);
+        return { isAuthenticated: true, username: mailClient.currentUser || username };
       }
+    } catch (err) {
+      console.warn('[MailService] Silent auto-auth check notice:', err.message);
     }
 
     return {
       isAuthenticated: Boolean(mailClient.canary),
-      username: creds.username
+      username: mailClient.currentUser || null
     };
   },
 
   /**
-   * Retrieve list of mail folders
+   * Set user credentials and initialize session
+   */
+  async login(username, password) {
+    return await mailClient.login(username, password);
+  },
+
+  /**
+   * Clear session
+   */
+  async logout() {
+    return await mailClient.logout();
+  },
+
+  /**
+   * Get list of standard folders with their display metadata
    */
   async getFolders() {
     const payload = {
@@ -71,38 +69,130 @@ export const mailService = {
         __type: 'GetFolderRequest:#Exchange',
         FolderShape: {
           __type: 'FolderResponseShape:#Exchange',
-          BaseShape: 'AllProperties'
+          BaseShape: 'Default'
         },
         FolderIds: [
-          {
-            __type: 'DistinguishedFolderId:#Exchange',
-            Id: 'msgfolderroot'
-          }
+          { __type: 'DistinguishedFolderId:#Exchange', Id: 'inbox' },
+          { __type: 'DistinguishedFolderId:#Exchange', Id: 'sentitems' },
+          { __type: 'DistinguishedFolderId:#Exchange', Id: 'drafts' },
+          { __type: 'DistinguishedFolderId:#Exchange', Id: 'deleteditems' },
+          { __type: 'DistinguishedFolderId:#Exchange', Id: 'junkemail' }
         ]
       }
     };
 
     try {
       const res = await mailClient.serviceCall('GetFolder', payload);
-      const rootFolder = res?.Body?.ResponseMessages?.Items?.[0]?.Folders?.[0];
+      const items = res?.Body?.ResponseMessages?.Items || [];
 
-      return DISTINGUISHED_FOLDERS.map((f) => ({
-        id: f.id,
-        name: f.name,
-        icon: f.icon,
-        unreadCount: f.id === 'inbox' ? (rootFolder?.UnreadCount || 0) : 0,
-        totalCount: f.id === 'inbox' ? (rootFolder?.TotalCount || 0) : 0
-      }));
+      return items.map((it) => {
+        const folder = it.Folders?.[0] || {};
+        const distinguishedId = folder.DistinguishedFolderId || folder.FolderId?.Id;
+        const displayName = folder.DisplayName;
+        const totalCount = folder.TotalCount || 0;
+        const unreadCount = folder.UnreadCount || 0;
+
+        let icon = 'Folder';
+        let localizedName = displayName;
+
+        switch (distinguishedId) {
+          case 'inbox':
+            icon = 'Inbox';
+            localizedName = 'Входящие';
+            break;
+          case 'sentitems':
+            icon = 'Send';
+            localizedName = 'Отправленные';
+            break;
+          case 'drafts':
+            icon = 'FileText';
+            localizedName = 'Черновики';
+            break;
+          case 'deleteditems':
+            icon = 'Trash2';
+            localizedName = 'Удалённые';
+            break;
+          case 'junkemail':
+            icon = 'AlertOctagon';
+            localizedName = 'Спам';
+            break;
+          default:
+            break;
+        }
+
+        return {
+          id: distinguishedId || folder.FolderId?.Id,
+          rawFolderId: folder.FolderId?.Id,
+          name: localizedName,
+          unreadCount,
+          totalCount,
+          icon
+        };
+      });
     } catch (err) {
-      console.warn('[MailService] GetFolder failed, falling back to standard list:', err.message);
-      return DISTINGUISHED_FOLDERS.map((f) => ({ ...f, unreadCount: 0, totalCount: 0 }));
+      console.warn('[MailService] Failed to load folder metadata dynamically, returning defaults:', err.message);
+      return [
+        { id: 'inbox', name: 'Входящие', unreadCount: 0, totalCount: 0, icon: 'Inbox' },
+        { id: 'sentitems', name: 'Отправленные', unreadCount: 0, totalCount: 0, icon: 'Send' },
+        { id: 'drafts', name: 'Черновики', unreadCount: 0, totalCount: 0, icon: 'FileText' },
+        { id: 'deleteditems', name: 'Удалённые', unreadCount: 0, totalCount: 0, icon: 'Trash2' },
+        { id: 'junkemail', name: 'Спам', unreadCount: 0, totalCount: 0, icon: 'AlertOctagon' }
+      ];
     }
   },
 
   /**
-   * Modern OWA Conversation View (FindConversation)
+   * Helper to extract body string safely from Exchange Item
+   * Supports complex structures, string values, UniqueBody, and Preview fallback
    */
-  async getConversationsByFindConversation({ folderId = 'inbox', offset = 0, limit = 25 } = {}) {
+  _extractBody(item) {
+    if (!item) return { body: '', bodyType: 'HTML' };
+
+    const candidates = [
+      item.Body,
+      item.UniqueBody,
+      item.NormalizedBody
+    ];
+
+    let bodyVal = '';
+    let bodyType = 'HTML';
+
+    for (const cand of candidates) {
+      if (!cand) continue;
+
+      if (typeof cand === 'string' && cand.trim().length > 0) {
+        bodyVal = cand;
+        bodyType = (cand.includes('<') && cand.includes('>')) ? 'HTML' : 'Text';
+        break;
+      }
+
+      if (typeof cand === 'object') {
+        const val = cand.Value ?? cand.Text ?? cand.Content ?? cand._ ?? cand.__value ?? '';
+        if (typeof val === 'string' && val.trim().length > 0) {
+          bodyVal = val;
+          const rawType = (cand.BodyType || cand.__type || '').toUpperCase();
+          bodyType = rawType.includes('TEXT') && !val.includes('<html') && !val.includes('<div')
+            ? 'Text'
+            : 'HTML';
+          break;
+        }
+      }
+    }
+
+    // Fallback to Preview if all body objects were empty
+    if (!bodyVal && item.Preview) {
+      bodyVal = item.Preview;
+      bodyType = 'Text';
+    }
+
+    const finalBodyType = bodyType.toUpperCase() === 'TEXT' ? 'Text' : 'HTML';
+    return { body: bodyVal, bodyType: finalBodyType };
+  },
+
+  /**
+   * Primary: FindConversation (OWA 2013 grouped thread view)
+   */
+  async getConversationsByFindConversation({ folderId = 'inbox', offset = 0, limit = 50 } = {}) {
     const isDistinguished = !folderId.includes('/') && folderId.length < 30;
 
     const parentFolderBase = isDistinguished
@@ -113,14 +203,7 @@ export const mailService = {
       __type: 'FindConversationJsonRequest:#Exchange',
       Header: {
         __type: 'JsonRequestHeaders:#Exchange',
-        RequestServerVersion: 'Exchange2013',
-        TimeZoneContext: {
-          __type: 'TimeZoneContext:#Exchange',
-          TimeZoneDefinition: {
-            __type: 'TimeZoneDefinitionType:#Exchange',
-            Id: 'UTC'
-          }
-        }
+        RequestServerVersion: 'Exchange2013'
       },
       Body: {
         __type: 'FindConversationRequest:#Exchange',
@@ -142,17 +225,21 @@ export const mailService = {
     };
 
     const res = await mailClient.serviceCall('FindConversation', payload);
-    const conversations = res?.Body?.Conversations || [];
+    const conversations = res?.Body?.Conversations || res?.Body?.ResponseMessages?.Items?.[0]?.Conversations || [];
 
     return conversations.map((c) => {
       const convId = c.ConversationId?.Id;
-      const itemId = c.ItemIds?.[0]?.Id || c.GlobalItemIds?.[0]?.Id;
+      const rawItemId = c.ItemIds?.[0]?.Id || (typeof c.ItemIds?.[0] === 'string' ? c.ItemIds[0] : null) ||
+                        c.GlobalItemIds?.[0]?.Id || (typeof c.GlobalItemIds?.[0] === 'string' ? c.GlobalItemIds[0] : null);
+      const itemId = rawItemId || convId;
       const senders = c.UniqueSenders || c.GlobalUniqueSenders || [];
       const senderDisplay = senders[0] || 'Неизвестный отправитель';
+      const snippet = c.Preview || c.UniqueBody?.Value || '';
 
       return {
         id: convId || itemId,
-        itemId: itemId || convId,
+        convId: convId,
+        itemId: itemId,
         subject: c.ConversationTopic || '(Без темы)',
         sender: senderDisplay,
         senders: senders,
@@ -161,16 +248,18 @@ export const mailService = {
         unreadCount: c.UnreadCount || 0,
         isRead: (c.UnreadCount || 0) === 0,
         messageCount: c.MessageCount || 1,
-        size: c.Size || c.GlobalSize || 0
+        size: c.Size || c.GlobalSize || 0,
+        snippet: snippet
       };
     });
   },
 
   /**
-   * Universal Item View (FindItem)
+   * Fallback: FindItem (Classic item-level view)
    */
-  async getItemsByFindItem({ folderId = 'inbox', offset = 0, limit = 25 } = {}) {
+  async getItemsByFindItem({ folderId = 'inbox', offset = 0, limit = 50 } = {}) {
     const isDistinguished = !folderId.includes('/') && folderId.length < 30;
+
     const parentFolderBase = isDistinguished
       ? { __type: 'DistinguishedFolderId:#Exchange', Id: folderId }
       : { __type: 'FolderId:#Exchange', Id: folderId };
@@ -179,28 +268,19 @@ export const mailService = {
       __type: 'FindItemJsonRequest:#Exchange',
       Header: {
         __type: 'JsonRequestHeaders:#Exchange',
-        RequestServerVersion: 'Exchange2013',
-        TimeZoneContext: {
-          __type: 'TimeZoneContext:#Exchange',
-          TimeZoneDefinition: {
-            __type: 'TimeZoneDefinitionType:#Exchange',
-            Id: 'UTC'
-          }
-        }
+        RequestServerVersion: 'Exchange2013'
       },
       Body: {
         __type: 'FindItemRequest:#Exchange',
-        Traversal: 'Shallow',
         ItemShape: {
           __type: 'ItemResponseShape:#Exchange',
           BaseShape: 'IdOnly',
           AdditionalProperties: [
-            { __type: 'PropertyUri:#Exchange', FieldURI: 'ItemSubject' },
-            { __type: 'PropertyUri:#Exchange', FieldURI: 'ItemDateTimeReceived' },
-            { __type: 'PropertyUri:#Exchange', FieldURI: 'ItemHasAttachments' },
-            { __type: 'PropertyUri:#Exchange', FieldURI: 'MessageFrom' },
-            { __type: 'PropertyUri:#Exchange', FieldURI: 'MessageIsRead' },
-            { __type: 'PropertyUri:#Exchange', FieldURI: 'ItemSize' }
+            { __type: 'PropertyUri:#Exchange', FieldURI: 'item:Subject' },
+            { __type: 'PropertyUri:#Exchange', FieldURI: 'item:DateTimeReceived' },
+            { __type: 'PropertyUri:#Exchange', FieldURI: 'item:HasAttachments' },
+            { __type: 'PropertyUri:#Exchange', FieldURI: 'message:IsRead' },
+            { __type: 'PropertyUri:#Exchange', FieldURI: 'message:From' }
           ]
         },
         ParentFolderIds: [parentFolderBase],
@@ -214,51 +294,57 @@ export const mailService = {
     };
 
     const res = await mailClient.serviceCall('FindItem', payload);
-    const items = res?.Body?.ResponseMessages?.Items?.[0]?.RootFolder?.Items || [];
+    const rootFolder = res?.Body?.ResponseMessages?.Items?.[0]?.RootFolder;
+    const items = rootFolder?.Items || [];
 
-    return items.map((item) => {
-      const itemId = item.ItemId?.Id;
-      const fromMailbox = item.From?.Mailbox || {};
-      const senderDisplay = fromMailbox.Name || fromMailbox.EmailAddress || 'Неизвестный отправитель';
+    return items.map((it) => {
+      const fromMailbox = it.From?.Mailbox || {};
+      const senderName = fromMailbox.Name || fromMailbox.EmailAddress || 'Неизвестный отправитель';
+      const cleanSnippet = it.Preview || '';
 
       return {
-        id: itemId,
-        itemId: itemId,
-        subject: item.Subject || '(Без темы)',
-        sender: senderDisplay,
-        senders: [senderDisplay],
-        deliveryTime: item.DateTimeReceived,
-        hasAttachments: Boolean(item.HasAttachments),
-        unreadCount: item.IsRead ? 0 : 1,
-        isRead: Boolean(item.IsRead),
+        id: it.ItemId?.Id,
+        convId: null,
+        itemId: it.ItemId?.Id,
+        subject: it.Subject || '(Без темы)',
+        sender: senderName,
+        senders: [senderName],
+        deliveryTime: it.DateTimeReceived,
+        hasAttachments: Boolean(it.HasAttachments),
+        unreadCount: it.IsRead ? 0 : 1,
+        isRead: Boolean(it.IsRead),
         messageCount: 1,
-        size: item.Size || 0
+        size: 0,
+        snippet: cleanSnippet
       };
     });
   },
 
   /**
-   * Get messages / conversations with resilient automatic fallback
+   * Unified method to load folder items (prioritizes FindConversation)
    */
-  async getConversations({ folderId = 'inbox', offset = 0, limit = 25 } = {}) {
+  async getConversations({ folderId = 'inbox', offset = 0, limit = 50 } = {}) {
     try {
       const convs = await this.getConversationsByFindConversation({ folderId, offset, limit });
       if (Array.isArray(convs) && convs.length > 0) {
         return convs;
       }
     } catch (err) {
-      console.warn('[MailService] FindConversation failed, trying FindItem fallback:', err.message);
+      console.warn('[MailService] FindConversation error, trying FindItem fallback:', err.message);
     }
 
-    return this.getItemsByFindItem({ folderId, offset, limit });
+    try {
+      return await this.getItemsByFindItem({ folderId, offset, limit });
+    } catch (err2) {
+      console.warn('[MailService] FindItem fallback also failed:', err2.message);
+      return [];
+    }
   },
 
   /**
-   * Get full email message by ItemId (GetItem)
+   * Direct GetItem call to Exchange with AllProperties shape
    */
-  async getMessage(itemId) {
-    if (!itemId) throw new Error('itemId обязателен');
-
+  async _fetchSingleItem(realItemId) {
     const payload = {
       __type: 'GetItemJsonRequest:#Exchange',
       Header: {
@@ -273,19 +359,27 @@ export const mailService = {
           IncludeMimeContent: false
         },
         ItemIds: [
-          {
-            __type: 'ItemId:#Exchange',
-            Id: itemId
-          }
+          { __type: 'ItemId:#Exchange', Id: realItemId }
         ]
       }
     };
 
     const res = await mailClient.serviceCall('GetItem', payload);
     const item = res?.Body?.ResponseMessages?.Items?.[0]?.Items?.[0];
+
     if (!item) {
-      throw new Error('Письмо не найдено');
+      throw new Error('Письмо не найдено на сервере');
     }
+
+    const { body, bodyType } = this._extractBody(item);
+
+    const attachments = (item.Attachments || []).map((att) => ({
+      id: att.AttachmentId?.Id,
+      name: att.Name || 'Вложение',
+      contentType: att.ContentType || 'application/octet-stream',
+      size: att.Size || 0,
+      isInline: Boolean(att.IsInline)
+    }));
 
     const fromMailbox = item.From?.Mailbox || {};
     const fromSender = {
@@ -294,77 +388,171 @@ export const mailService = {
     };
 
     const toRecipients = (item.ToRecipients || []).map((r) => ({
-      name: r.Name || r.EmailAddress || '',
-      email: r.EmailAddress || ''
+      name: r.Mailbox?.Name || r.Name || r.EmailAddress || '',
+      email: r.Mailbox?.EmailAddress || r.EmailAddress || ''
     }));
 
     const ccRecipients = (item.CcRecipients || []).map((r) => ({
-      name: r.Name || r.EmailAddress || '',
-      email: r.EmailAddress || ''
+      name: r.Mailbox?.Name || r.Name || r.EmailAddress || '',
+      email: r.Mailbox?.EmailAddress || r.EmailAddress || ''
     }));
-
-    const attachments = (item.Attachments || []).map((att) => ({
-      id: att.AttachmentId?.Id,
-      name: att.Name || 'Вложение',
-      size: att.Size || 0,
-      contentType: att.ContentType || 'application/octet-stream',
-      isInline: Boolean(att.IsInline)
-    }));
-
-    const bodyVal = item.Body?.Value || '';
-    const bodyType = item.Body?.BodyType || 'HTML';
 
     return {
-      id: item.ItemId?.Id,
-      changeKey: item.ItemId?.ChangeKey,
+      id: item.ItemId?.Id || realItemId,
       subject: item.Subject || '(Без темы)',
       from: fromSender,
       to: toRecipients,
       cc: ccRecipients,
       dateTimeReceived: item.DateTimeReceived,
-      dateTimeSent: item.DateTimeSent,
-      hasAttachments: Boolean(item.HasAttachments),
-      attachments,
-      isRead: Boolean(item.IsRead),
-      importance: item.Importance || 'Normal',
-      body: bodyVal,
-      bodyType: bodyType
+      body,
+      bodyType,
+      attachments
     };
   },
 
   /**
-   * Send a new email message (CreateItem with SendAndSaveCopy)
+   * Get full email message by ItemId or ConversationId
    */
-  async sendEmail({ to, cc = [], subject = '', body = '', isHtml = true }) {
-    if (!to) throw new Error('Укажите получателя (Кому)');
+  async getMessage(identifier) {
+    if (!identifier) throw new Error('Идентификатор письма обязателен');
 
-    const toList = Array.isArray(to) ? to : to.split(/[,;]/).map((e) => e.trim()).filter(Boolean);
-    const ccList = Array.isArray(cc) ? cc : cc.split(/[,;]/).map((e) => e.trim()).filter(Boolean);
+    // 1. If it's a direct ItemId (starts with AAMk), fetch it directly
+    if (identifier.startsWith('AAMk')) {
+      try {
+        const itemRes = await this._fetchSingleItem(identifier);
+        if (itemRes && itemRes.body && itemRes.body.trim().length > 0) {
+          return itemRes;
+        }
+        if (itemRes) return itemRes;
+      } catch (err) {
+        console.warn('[MailService] _fetchSingleItem failed for AAMk:', err.message);
+      }
+    }
 
-    const toRecipients = toList.map((addr) => ({
-      __type: 'Mailbox:#Exchange',
-      EmailAddress: addr,
-      RoutingType: 'SMTP'
-    }));
+    // 2. If it's a ConversationId (starts with AAQk) or fallback to conversation nodes
+    if (identifier.startsWith('AAQk')) {
+      try {
+        const convRes = await this.getConversationItems(identifier);
+        if (convRes && convRes.messages && convRes.messages.length > 0) {
+          const msgWithBody = [...convRes.messages].reverse().find(m => m.body && m.body.trim().length > 0);
+          if (msgWithBody) return msgWithBody;
+          const lastMsg = convRes.messages[convRes.messages.length - 1];
+          if (lastMsg?.id && lastMsg.id.startsWith('AAMk')) {
+            try {
+              return await this._fetchSingleItem(lastMsg.id);
+            } catch (_) {}
+          }
+          return lastMsg;
+        }
+      } catch (convErr) {
+        console.warn('[MailService] GetConversationItems failed:', convErr.message);
+      }
+    }
 
-    const ccRecipients = ccList.map((addr) => ({
-      __type: 'Mailbox:#Exchange',
-      EmailAddress: addr,
-      RoutingType: 'SMTP'
-    }));
+    // 3. Fallback: try calling _fetchSingleItem with whatever ID was provided
+    return await this._fetchSingleItem(identifier);
+  },
+
+  /**
+   * Get all messages in a Conversation thread
+   */
+  async getConversationItems(conversationId) {
+    const payload = {
+      __type: 'GetConversationItemsJsonRequest:#Exchange',
+      Header: {
+        __type: 'JsonRequestHeaders:#Exchange',
+        RequestServerVersion: 'Exchange2013'
+      },
+      Body: {
+        __type: 'GetConversationItemsRequest:#Exchange',
+        ItemShape: {
+          __type: 'ItemResponseShape:#Exchange',
+          BaseShape: 'AllProperties',
+          IncludeMimeContent: false
+        },
+        Conversations: [
+          {
+            __type: 'ConversationRequestType:#Exchange',
+            ConversationId: {
+              __type: 'ItemId:#Exchange',
+              Id: conversationId
+            }
+          }
+        ]
+      }
+    };
+
+    const res = await mailClient.serviceCall('GetConversationItems', payload);
+    const convResponse = res?.Body?.ResponseMessages?.Items?.[0]?.Conversation;
+    const rawItems = convResponse?.ConversationNodes || [];
+
+    const messages = [];
+    for (const node of rawItems) {
+      const items = node.Items || [];
+      for (const item of items) {
+        const { body, bodyType } = this._extractBody(item);
+        const attachments = (item.Attachments || []).map((att) => ({
+          id: att.AttachmentId?.Id,
+          name: att.Name || 'Вложение',
+          contentType: att.ContentType || 'application/octet-stream',
+          size: att.Size || 0,
+          isInline: Boolean(att.IsInline)
+        }));
+
+        const fromMailbox = item.From?.Mailbox || {};
+        const fromSender = {
+          name: fromMailbox.Name || fromMailbox.EmailAddress || 'Неизвестно',
+          email: fromMailbox.EmailAddress || ''
+        };
+
+        const toRecipients = (item.ToRecipients || []).map((r) => ({
+          name: r.Mailbox?.Name || r.Name || r.EmailAddress || '',
+          email: r.Mailbox?.EmailAddress || r.EmailAddress || ''
+        }));
+
+        messages.push({
+          id: item.ItemId?.Id,
+          subject: item.Subject,
+          from: fromSender,
+          to: toRecipients,
+          dateTimeReceived: item.DateTimeReceived,
+          body,
+          bodyType,
+          attachments
+        });
+      }
+    }
+
+    return {
+      conversationId,
+      messages
+    };
+  },
+
+  /**
+   * Send an outgoing email
+   */
+  async sendEmail({ to, subject, body, isHtml = true }) {
+    if (!to) throw new Error('Получатель (to) обязателен');
+
+    const toAddresses = (Array.isArray(to) ? to : [to]).map((addr) => {
+      const trimmed = addr.trim();
+      const email = trimmed.includes('@') ? trimmed : `${trimmed}@msal.ru`;
+      return {
+        __type: 'EmailAddressType:#Exchange',
+        Mailbox: {
+          __type: 'EmailAddress:#Exchange',
+          EmailAddress: email,
+          RoutingType: 'SMTP'
+        }
+      };
+    });
 
     const payload = {
       __type: 'CreateItemJsonRequest:#Exchange',
       Header: {
         __type: 'JsonRequestHeaders:#Exchange',
-        RequestServerVersion: 'Exchange2013',
-        TimeZoneContext: {
-          __type: 'TimeZoneContext:#Exchange',
-          TimeZoneDefinition: {
-            __type: 'TimeZoneDefinitionType:#Exchange',
-            Id: 'UTC'
-          }
-        }
+        RequestServerVersion: 'Exchange2013'
       },
       Body: {
         __type: 'CreateItemRequest:#Exchange',
@@ -379,29 +567,26 @@ export const mailService = {
         Items: [
           {
             __type: 'Message:#Exchange',
-            ItemClass: 'IPM.Note',
-            Subject: subject,
+            Subject: subject || '(Без темы)',
             Body: {
-              __type: 'BodyType:#Exchange',
+              __type: 'BodyContentType:#Exchange',
               BodyType: isHtml ? 'HTML' : 'Text',
-              Value: isHtml ? (body.includes('<') ? body : `<div style="font-family: sans-serif; font-size: 14px;">${body.replace(/\n/g, '<br/>')}</div>`) : body
+              Value: isHtml ? (body.includes('<') ? body : `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px;">${body.replace(/\n/g, '<br/>')}</div>`) : (body || '')
             },
-            ToRecipients: toRecipients,
-            CcRecipients: ccRecipients
+            ToRecipients: toAddresses
           }
         ]
       }
     };
 
-    const res = await mailClient.serviceCall('CreateItem', payload);
-    return res;
+    return await mailClient.serviceCall('CreateItem', payload);
   },
 
   /**
-   * Delete an item (move to Deleted Items or permanently)
+   * Move item to Deleted Items
    */
-  async deleteItem(itemId, deleteType = 'MoveToDeletedItems') {
-    if (!itemId) throw new Error('itemId обязателен для удаления');
+  async deleteItem(itemId) {
+    if (!itemId) throw new Error('itemId обязателен');
 
     const payload = {
       __type: 'DeleteItemJsonRequest:#Exchange',
@@ -411,16 +596,22 @@ export const mailService = {
       },
       Body: {
         __type: 'DeleteItemRequest:#Exchange',
-        DeleteType: deleteType,
+        DeleteType: 'MoveToDeletedItems',
         ItemIds: [
-          {
-            __type: 'ItemId:#Exchange',
-            Id: itemId
-          }
+          { __type: 'ItemId:#Exchange', Id: itemId }
         ]
       }
     };
 
     return await mailClient.serviceCall('DeleteItem', payload);
+  },
+
+  /**
+   * Download attachment by AttachmentId
+   */
+  async getAttachment(attachmentId, fileName, contentType) {
+    return await mailClient.downloadAttachment(attachmentId, fileName, contentType);
   }
 };
+
+export default mailService;
