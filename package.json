@@ -28,7 +28,19 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "!electron/**/*.md"
+      "!electron/**/*.md",
+      "!node_modules/@capacitor/**",
+      "!node_modules/@aparajita/**",
+      "!node_modules/lucide-react/**",
+      "!node_modules/react/**",
+      "!node_modules/react-dom/**",
+      "!node_modules/react-router/**",
+      "!node_modules/react-router-dom/**",
+      "!node_modules/scheduler/**",
+      "!node_modules/loose-envify/**",
+      "!node_modules/js-tokens/**",
+      "!node_modules/cookie/**",
+      "!node_modules/set-cookie-parser/**"
     ],
     "mac": {
       "target": [

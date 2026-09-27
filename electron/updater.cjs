@@ -56,6 +56,15 @@ function unsupportedReason() {
   return null;
 }
 
+// Короткое понятное сообщение вместо многострочной ошибки со стеком и заголовками
+function humanError(err) {
+  const raw = String(err?.message || err || 'Неизвестная ошибка');
+  if (/Cannot find latest.*\.yml|404/i.test(raw)) return 'В последнем релизе нет файлов автообновления';
+  if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|ERR_INTERNET|net::ERR|network/i.test(raw)) return 'Нет связи с GitHub';
+  const first = raw.split('\n')[0].trim();
+  return first.length > 160 ? `${first.slice(0, 157)}…` : first;
+}
+
 function stripHtml(s) {
   return typeof s === 'string' ? s.replace(/<[^>]+>/g, '').trim() : null;
 }
@@ -129,7 +138,7 @@ function initUpdater(windowGetter, assertTrustedSender) {
     });
     autoUpdater.on('error', (err) => {
       if (state.status === 'checking' || state.status === 'downloading') {
-        setState({ status: 'error', error: err?.message || String(err) });
+        setState({ status: 'error', error: humanError(err) });
       }
     });
   }
@@ -149,7 +158,7 @@ function initUpdater(windowGetter, assertTrustedSender) {
         setState({ status: 'none', version: info?.version || null });
       }
     } catch (err) {
-      setState({ status: 'error', error: err?.message || String(err) });
+      setState({ status: 'error', error: humanError(err) });
     }
     return state;
   }));
@@ -166,7 +175,7 @@ function initUpdater(windowGetter, assertTrustedSender) {
       setState({ status: 'ready' });
     } catch (err) {
       verifiedFile = null;
-      setState({ status: 'error', error: err?.message || String(err) });
+      setState({ status: 'error', error: humanError(err) });
     }
     return state;
   }));
@@ -177,7 +186,7 @@ function initUpdater(windowGetter, assertTrustedSender) {
     try {
       await verifyDownloaded([verifiedFile], state.version);
     } catch (err) {
-      setState({ status: 'error', error: err?.message || String(err) });
+      setState({ status: 'error', error: humanError(err) });
       return false;
     }
     setImmediate(() => autoUpdater.quitAndInstall(false, true));
