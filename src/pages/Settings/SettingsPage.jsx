@@ -2,27 +2,24 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
-import { lkService } from '../../api';
 import { Card } from '../../components/common/Card';
-import { Logo } from '../../components/common/Logo';
-import { LegalModal } from '../../components/common/LegalModal';
 import { Icons } from '../../components/common/Icons';
-import { updateService, getAppPlatform } from '../../api/updateService';
+import { LegalModal } from '../../components/common/LegalModal';
+import { updateService } from '../../api/updateService';
+import { getAppPlatform } from '../../api/updateService';
 
-function parsePrivacyBool(val, fallback = false) {
-  if (val === undefined || val === null) return fallback;
-  if (typeof val === "boolean") return val;
-  if (typeof val === "number") return val === 1;
-  if (typeof val === "string") {
+function parsePrivacyBool(val) {
+  if (typeof val === 'boolean') return val;
+  if (typeof val === 'number') return val === 1;
+  if (typeof val === 'string') {
     const s = val.trim().toLowerCase();
-    if (s === "true" || s === "1" || s === "yes") return true;
-    if (s === "false" || s === "0" || s === "no") return false;
+    return s === 'true' || s === '1' || s === 'yes';
   }
-  return fallback;
+  return false;
 }
 
-function resolveUserPrivacy(user, serverData = null) {
-  const src = serverData || user?.access || user?.privacy || user || {};
+function resolveUserPrivacy(user) {
+  const src = user?.accessSettings || user?.privacy || {};
 
   // Email
   let showEmail = false;
@@ -60,8 +57,26 @@ export const SettingsPage = () => {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateStatus, setUpdateStatus] = useState(null);
 
+  // Topbar vs Sidebar Drawer layout preference
+  const [useSidebarDrawer, setUseSidebarDrawer] = useState(() => {
+    try {
+      return localStorage.getItem('msal_mobile_layout_mode') === 'sidebar';
+    } catch (_) {
+      return false;
+    }
+  });
+
   const platform = getAppPlatform();
   const platformLabel = platform === 'userscript' ? 'Userscript (Safari / Web)' : platform === 'ios' ? 'Apple iOS' : platform === 'android' ? 'Android' : platform === 'mac' ? 'macOS' : platform === 'win' ? 'Windows' : 'Web';
+
+  const handleToggleMobileLayout = () => {
+    const nextVal = !useSidebarDrawer;
+    setUseSidebarDrawer(nextVal);
+    try {
+      localStorage.setItem('msal_mobile_layout_mode', nextVal ? 'sidebar' : 'topbar');
+      window.dispatchEvent(new CustomEvent('msal_mobile_layout_changed', { detail: nextVal ? 'sidebar' : 'topbar' }));
+    } catch (_) {}
+  };
 
   const handleCheckUpdates = async () => {
     setCheckingUpdate(true);
@@ -98,60 +113,50 @@ export const SettingsPage = () => {
   // Synchronize privacy settings from server /student/access or updated user profile
   useEffect(() => {
     let isMounted = true;
-
-    async function loadRemotePrivacy() {
+    async function fetchServerPrivacy() {
       try {
-        const remoteAccess = await lkService.getPrivacySettings();
-        if (remoteAccess && isMounted) {
-          setPrivacy(resolveUserPrivacy(user, remoteAccess));
-          return;
+        const { studentService } = await import('../../api');
+        const access = await studentService.getAccessSettings();
+        if (isMounted && access && typeof access === 'object') {
+          setPrivacy(resolveUserPrivacy({ accessSettings: access }));
         }
-      } catch (e) {
-        console.warn('Could not fetch /student/access directly:', e);
-      }
-
-      if (user && isMounted) {
-        setPrivacy(resolveUserPrivacy(user));
+      } catch (err) {
+        // Fallback silently to user profile cached data
       }
     }
-
-    loadRemotePrivacy();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [user]);
+    fetchServerPrivacy();
+    return () => { isMounted = false; };
+  }, []);
 
   const handleTogglePrivacy = async (key) => {
-    const updated = { ...privacy, [key]: !privacy[key] };
-    setPrivacy(updated);
+    const nextVal = !privacy[key];
+    const previousState = { ...privacy };
+    setPrivacy(prev => ({ ...prev, [key]: nextVal }));
     setSavingPrivacy(true);
+
     try {
-      // Send both field formats for 100% backend parity
-      await lkService.updatePrivacySettings({
-        email: updated.showEmail,
-        photo: updated.showPhoto,
-        mobile: updated.showMobile,
-        showEmail: updated.showEmail,
-        showPhoto: updated.showPhoto,
-        showMobile: updated.showMobile
-      });
-    } catch (e) {
-      console.warn('Failed to update privacy on server:', e);
+      const { studentService } = await import('../../api');
+      const payload = {
+        showEmail: key === 'showEmail' ? nextVal : privacy.showEmail,
+        showPhoto: key === 'showPhoto' ? nextVal : privacy.showPhoto,
+        showMobile: key === 'showMobile' ? nextVal : privacy.showMobile
+      };
+      await studentService.updateAccessSettings(payload);
+    } catch (err) {
+      console.error('[SettingsPage] Failed to save privacy settings:', err);
+      setPrivacy(previousState);
+      alert('Не удалось сохранить настройку на сервере. Проверьте подключение к сети.');
     } finally {
       setSavingPrivacy(false);
     }
   };
 
-  const handleLogout = async () => {
-    await logout();
-    navigate('/login');
-  };
-
   const getInitials = (name = '') => {
     if (!name || typeof name !== 'string') return '??';
     const parts = name.trim().split(/\s+/);
-    if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+    if (parts.length >= 2 && parts[0] && parts[1]) {
+      return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+    }
     return name.slice(0, 2).toUpperCase();
   };
 
@@ -160,13 +165,16 @@ export const SettingsPage = () => {
     : null;
 
   return (
-    <div className="space-y-6 pb-12">
+    <div className="space-y-6 max-w-xl mx-auto">
+      {/* Title */}
       <div>
-        <h1 className="text-2xl font-black text-dark">Профиль и настройки</h1>
-        <p className="text-xs text-textMuted mt-0.5">Данные студента и параметры системы</p>
+        <h1 className="text-2xl font-black text-dark">Настройки</h1>
+        <p className="text-xs text-textMuted mt-1">
+          Управление профилем, внешним видом и безопасностью
+        </p>
       </div>
 
-      {/* Profile Card */}
+      {/* User Profile Card */}
       <Card className="p-6 flex flex-col sm:flex-row items-center sm:items-start space-y-4 sm:space-y-0 sm:space-x-5 text-center sm:text-left">
         {photoUrl ? (
           <img
@@ -221,31 +229,64 @@ export const SettingsPage = () => {
       {/* Appearance Section */}
       <div>
         <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted mb-3 px-1">
-          Внешний вид
+          Внешний вид и интерфейс
         </h3>
-        <Card className="p-4 flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="p-2 rounded-xl bg-bg text-dark">
-              {isDark ? <Icons.Moon size={20} /> : <Icons.Sun size={20} />}
+        <Card className="p-0 overflow-hidden divide-y divide-border">
+          {/* Theme Switcher */}
+          <div className="p-4 flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <div className="p-2 rounded-xl bg-bg text-dark">
+                {isDark ? <Icons.Moon size={20} /> : <Icons.Sun size={20} />}
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-dark">Тёмная тема</h4>
+                <p className="text-xs text-textMuted">Переключение темы оформления интерфейса</p>
+              </div>
             </div>
-            <div>
-              <h4 className="text-sm font-bold text-dark">Тёмная тема</h4>
-              <p className="text-xs text-textMuted">Переключение темы оформления интерфейса</p>
-            </div>
+
+            <button
+              onClick={toggleTheme}
+              className={`w-12 h-7 rounded-full p-1 transition-colors duration-150 ease-in-out ${
+                isDark ? 'bg-secondary' : 'bg-gray-300 dark:bg-gray-700'
+              }`}
+            >
+              <div
+                className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform duration-150 ease-in-out ${
+                  isDark ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
           </div>
 
-          <button
-            onClick={toggleTheme}
-            className={`w-12 h-7 rounded-full p-1 transition-colors duration-200 ease-in-out ${
-              isDark ? 'bg-secondary' : 'bg-gray-300 dark:bg-gray-700'
-            }`}
-          >
-            <div
-              className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform duration-200 ease-in-out ${
-                isDark ? 'translate-x-5' : 'translate-x-0'
+          {/* Topbar vs Sidebar Drawer Toggle (Mobile) */}
+          <div className="p-4 flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <div className="p-2 rounded-xl bg-bg text-dark">
+                <Icons.Menu size={20} />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-dark">Кнопки топбара в боковое меню</h4>
+                <p className="text-xs text-textMuted">
+                  {useSidebarDrawer
+                    ? 'Топбар скрыт, кнопки доступны через выкатное боковое меню'
+                    : 'Стандартный верхний топбар с кнопками профиля, темы и выхода'}
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={handleToggleMobileLayout}
+              className={`w-12 h-7 rounded-full p-1 transition-colors duration-150 ease-in-out shrink-0 ${
+                useSidebarDrawer ? 'bg-secondary' : 'bg-gray-300 dark:bg-gray-700'
               }`}
-            />
-          </button>
+            >
+              <div
+                className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform duration-150 ease-in-out ${
+                  useSidebarDrawer ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
         </Card>
       </div>
 
@@ -265,12 +306,12 @@ export const SettingsPage = () => {
               <button
                 disabled={savingPrivacy}
                 onClick={() => handleTogglePrivacy(item.key)}
-                className={`w-12 h-7 rounded-full p-1 transition-colors duration-200 ease-in-out shrink-0 ${
+                className={`w-12 h-7 rounded-full p-1 transition-colors duration-150 ease-in-out shrink-0 ${
                   privacy[item.key] ? 'bg-secondary' : 'bg-gray-300 dark:bg-gray-700'
                 }`}
               >
                 <div
-                  className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform duration-200 ease-in-out ${
+                  className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform duration-150 ease-in-out ${
                     privacy[item.key] ? 'translate-x-5' : 'translate-x-0'
                   }`}
                 />
@@ -283,52 +324,43 @@ export const SettingsPage = () => {
       {/* App Updates Section */}
       <div>
         <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted mb-3 px-1">
-          Обновление приложения
+          Обновления приложения
         </h3>
-        <Card className="p-5 space-y-3 dark:bg-[#1F2430] dark:border-[#2B3242]">
+        <Card className="p-4 space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
-              <div className="p-2.5 rounded-xl bg-primary/10 text-primary dark:text-[#38BDF8]">
-                <Icons.Download size={20} />
+              <div className="p-2 rounded-xl bg-bg text-dark">
+                <Icons.Refresh size={20} />
               </div>
               <div>
-                <h4 className="text-sm font-bold text-dark dark:text-white">Текущая версия: v{updateService.getAppVersion()}</h4>
-                <p className="text-xs text-textMuted">Платформа: {platformLabel}</p>
+                <h4 className="text-sm font-bold text-dark">Текущая версия</h4>
+                <p className="text-xs text-textMuted">DarkMSAL v1.0.0 ({platformLabel})</p>
               </div>
             </div>
 
             <button
               onClick={handleCheckUpdates}
               disabled={checkingUpdate}
-              className="px-3.5 py-2 rounded-xl bg-primary hover:bg-primary/90 text-white font-bold text-xs flex items-center space-x-1.5 transition-all disabled:opacity-50"
+              className="px-3 py-1.5 rounded-xl bg-primary text-white text-xs font-bold hover:bg-primary/90 transition-all flex items-center space-x-1.5 shadow-sm disabled:opacity-50 cursor-pointer"
             >
-              {checkingUpdate ? (
-                <>
-                  <Icons.Refresh size={14} className="animate-spin" />
-                  <span>Проверка...</span>
-                </>
-              ) : (
-                <>
-                  <Icons.Refresh size={14} />
-                  <span>Проверить</span>
-                </>
-              )}
+              <Icons.Refresh size={14} className={checkingUpdate ? 'animate-spin' : ''} />
+              <span>{checkingUpdate ? 'Проверка...' : 'Проверить'}</span>
             </button>
           </div>
 
           {updateStatus && (
-            <div className={`p-3 rounded-xl text-xs font-medium border flex items-center justify-between ${
+            <div className={`p-3 rounded-xl text-xs flex items-center justify-between ${
               updateStatus.hasUpdate
-                ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900/50 text-emerald-800 dark:text-emerald-200'
-                : 'bg-bg dark:bg-[#12151B] border-border dark:border-[#283245] text-textMuted dark:text-[#8E98A8]'
+                ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-400 font-semibold'
+                : 'bg-bg text-textMuted border border-border'
             }`}>
               <span>{updateStatus.text}</span>
               {updateStatus.hasUpdate && (
                 <button
                   onClick={() => window.dispatchEvent(new CustomEvent('app-show-update-modal', { detail: updateStatus.info }))}
-                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs ml-2 shrink-0 transition-colors"
+                  className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-bold text-[11px] shadow-sm hover:bg-emerald-700 transition-colors"
                 >
-                  Обновить
+                  Установить
                 </button>
               )}
             </div>
@@ -336,92 +368,79 @@ export const SettingsPage = () => {
         </Card>
       </div>
 
-      {/* Userscript Switch Section */}
-      {platform === 'userscript' && (
-        <div>
-          <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted mb-3 px-1">
-            Интерфейс портала
-          </h3>
-          <Card className="p-4 flex items-center justify-between dark:bg-[#1F2430] dark:border-[#2B3242]">
-            <div>
-              <h4 className="text-sm font-bold text-dark dark:text-white">Стандартный кабинет МГЮА</h4>
-              <p className="text-xs text-textMuted dark:text-[#8E98A8]">Временно скрыть DarkMSAL и вернуться к старому виду сайта</p>
-            </div>
-            <button
-              onClick={() => window.dispatchEvent(new CustomEvent('darkmsal-minimize'))}
-              className="px-3 py-1.5 rounded-xl bg-bg dark:bg-[#12151B] hover:bg-border/60 text-dark dark:text-white font-bold text-xs border border-border dark:border-[#2B3242] transition-colors shrink-0 ml-2"
-            >
-              Свернуть
-            </button>
-          </Card>
-        </div>
-      )}
-
-      {/* About & Legal Information */}
+      {/* Legal & Compliance Section */}
       <div>
         <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted mb-3 px-1">
-          О приложении и безопасность
+          Правовая информация
         </h3>
-        <Card className="p-5 space-y-4 dark:bg-[#1F2430] dark:border-[#2B3242]">
-          <div className="flex items-center space-x-3.5">
-            <Logo size={46} className="ring-1 ring-border dark:ring-[#2B3242] shrink-0" />
-            <div>
-              <h4 className="text-base font-black text-dark dark:text-white">DarkMSAL</h4>
-              <p className="text-xs text-textMuted dark:text-[#8E98A8]">для Альма Матер с любовью.</p>
-              <div className="flex items-center space-x-2 mt-1">
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-bg dark:bg-[#12151B] border border-border dark:border-[#2B3242] text-textMuted dark:text-[#8E98A8]">
-                  Версия 1.0
-                </span>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                  AES-256 (152-ФЗ)
-                </span>
+        <Card className="p-0 overflow-hidden divide-y divide-border">
+          <button
+            onClick={() => setLegalModalTab('privacy')}
+            className="w-full p-4 flex items-center justify-between text-left hover:bg-bg/50 transition-colors cursor-pointer"
+          >
+            <div className="flex items-center space-x-3">
+              <Icons.Shield size={18} className="text-secondary" />
+              <div>
+                <h4 className="text-xs sm:text-sm font-semibold text-dark">Политика обработки персональных данных</h4>
+                <p className="text-[11px] text-textMuted">Соответствие 152-ФЗ и локальная безопасность</p>
               </div>
             </div>
-          </div>
+            <Icons.ChevronRight size={16} className="text-textMuted" />
+          </button>
 
-          <p className="text-xs text-textMuted dark:text-[#8E98A8] leading-relaxed pt-2 border-t border-border dark:border-[#2B3242]">
-            Приложение работает напрямую с серверами lk.msal.ru без промежуточных серверов. Все ваши персональные данные и токены шифруются локально на устройстве алгоритмом AES-GCM 256.
-          </p>
+          <button
+            onClick={() => setLegalModalTab('disclaimer')}
+            className="w-full p-4 flex items-center justify-between text-left hover:bg-bg/50 transition-colors cursor-pointer"
+          >
+            <div className="flex items-center space-x-3">
+              <Icons.AlertCircle size={18} className="text-secondary" />
+              <div>
+                <h4 className="text-xs sm:text-sm font-semibold text-dark">Отказ от ответственности</h4>
+                <p className="text-[11px] text-textMuted">Независимый статус клиента и условия использования</p>
+              </div>
+            </div>
+            <Icons.ChevronRight size={16} className="text-textMuted" />
+          </button>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-            <button
-              onClick={() => setLegalModalTab('terms')}
-              className="py-2.5 px-3 rounded-xl bg-bg dark:bg-[#12151B] hover:bg-border/60 dark:hover:bg-[#262D3D] text-dark dark:text-white font-bold text-xs border border-border dark:border-[#2B3242] transition-colors text-center"
-            >
-              Условия использования
-            </button>
-            <button
-              onClick={() => setLegalModalTab('privacy')}
-              className="py-2.5 px-3 rounded-xl bg-bg dark:bg-[#12151B] hover:bg-border/60 dark:hover:bg-[#262D3D] text-dark dark:text-white font-bold text-xs border border-border dark:border-[#2B3242] transition-colors text-center"
-            >
-              Политика конфиденциальности
-            </button>
-          </div>
+          <button
+            onClick={() => setLegalModalTab('terms')}
+            className="w-full p-4 flex items-center justify-between text-left hover:bg-bg/50 transition-colors cursor-pointer"
+          >
+            <div className="flex items-center space-x-3">
+              <Icons.BookOpen size={18} className="text-secondary" />
+              <div>
+                <h4 className="text-xs sm:text-sm font-semibold text-dark">Пользовательское соглашение</h4>
+                <p className="text-[11px] text-textMuted">Лицензия и правила доступа к сервисам</p>
+              </div>
+            </div>
+            <Icons.ChevronRight size={16} className="text-textMuted" />
+          </button>
         </Card>
       </div>
 
-      {/* Logout Button */}
-      <button
-        onClick={handleLogout}
-        className="w-full flex items-center justify-center space-x-2 p-4 rounded-2xl bg-card border border-rose-200 dark:border-rose-900/50 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/20 font-bold text-sm shadow-sm transition-colors"
-      >
-        <Icons.LogOut size={18} />
-        <span>Выйти из аккаунта</span>
-      </button>
-
-      {/* Version info */}
-      <div className="text-center pt-2 pb-2">
-        <p className="text-xs font-mono text-textMuted dark:text-[#8E98A8]">
-          DarkMSAL v1.0
-        </p>
+      {/* Logout Action */}
+      <div className="pt-2">
+        <button
+          onClick={() => {
+            if (window.confirm('Вы действительно хотите выйти из аккаунта?')) {
+              logout();
+              navigate('/login');
+            }
+          }}
+          className="w-full py-3 px-4 rounded-2xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 font-bold text-sm transition-all flex items-center justify-center space-x-2 border border-rose-500/20"
+        >
+          <Icons.LogOut size={18} />
+          <span>Выйти из аккаунта</span>
+        </button>
       </div>
 
-      {/* Legal Information Modal */}
       <LegalModal
-        isOpen={!!legalModalTab}
+        isOpen={Boolean(legalModalTab)}
+        initialTab={legalModalTab || 'privacy'}
         onClose={() => setLegalModalTab(null)}
-        initialTab={legalModalTab || 'terms'}
       />
     </div>
   );
 };
+
+export default SettingsPage;

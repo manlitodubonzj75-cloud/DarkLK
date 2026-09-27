@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -15,13 +15,41 @@ export const AppShell = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const isMailRoute = location.pathname.startsWith('/mail');
-  const [legalModalTab, setLegalModalTab] = React.useState(null);
-  const [isRefreshing, setIsRefreshing] = React.useState(false);
-  const [updateInfo, setUpdateInfo] = React.useState(null);
-  const [showUpdateModal, setShowUpdateModal] = React.useState(false);
-  const [showLegalGate, setShowLegalGate] = React.useState(() => {
+  const [legalModalTab, setLegalModalTab] = useState(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState(null);
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [showLegalGate, setShowLegalGate] = useState(() => {
     return !Boolean(localStorage.getItem("msal_legal_accepted_v1"));
   });
+
+  // Mobile layout mode: 'topbar' vs 'sidebar' (moves topbar buttons to side drawer)
+  const [mobileLayoutMode, setMobileLayoutMode] = useState(() => {
+    try {
+      return localStorage.getItem('msal_mobile_layout_mode') || 'topbar';
+    } catch (_) {
+      return 'topbar';
+    }
+  });
+
+  // Mobile side drawer state
+  const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
+
+  // Close drawer on route change
+  useEffect(() => {
+    setIsMobileDrawerOpen(false);
+  }, [location.pathname]);
+
+  // Listen for layout changes from SettingsPage
+  useEffect(() => {
+    const handleLayoutChange = (e) => {
+      if (e.detail) {
+        setMobileLayoutMode(e.detail);
+      }
+    };
+    window.addEventListener('msal_mobile_layout_changed', handleLayoutChange);
+    return () => window.removeEventListener('msal_mobile_layout_changed', handleLayoutChange);
+  }, []);
 
   const ALL_NAV_ITEMS = [
     { to: '/', label: 'Главная', icon: Icons.Home },
@@ -66,7 +94,7 @@ export const AppShell = () => {
     });
   };
 
-  React.useEffect(() => {
+  useEffect(() => {
     const timer = setTimeout(async () => {
       const res = await updateService.checkForUpdates({ force: false });
       if (res?.hasUpdate) {
@@ -105,7 +133,7 @@ export const AppShell = () => {
   };
 
   return (
-    <div className="flex h-full h-[100dvh] w-full bg-bg dark:bg-[#12151B] text-dark dark:text-white font-sans overflow-hidden transition-colors duration-200">
+    <div className="flex h-full h-[100dvh] w-full bg-bg dark:bg-[#12151B] text-dark dark:text-white font-sans overflow-hidden">
       {/* DESKTOP SIDEBAR */}
       <aside className="hidden md:flex flex-col w-64 h-full bg-primary dark:bg-[#12151B] text-white border-r border-white/10 dark:border-[#212634] shadow-xl z-20 shrink-0">
         {/* Logo */}
@@ -208,50 +236,161 @@ export const AppShell = () => {
         </div>
       </aside>
 
+      {/* MOBILE SIDEBAR DRAWER OVERLAY & PANEL */}
+      {mobileLayoutMode === 'sidebar' && (
+        <>
+          {/* Backdrop */}
+          <div
+            onClick={() => setIsMobileDrawerOpen(false)}
+            className={`md:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-sm transition-opacity duration-200 ${
+              isMobileDrawerOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+            }`}
+          />
+
+          {/* Drawer Sheet */}
+          <aside
+            className={`md:hidden fixed top-0 bottom-0 left-0 w-72 max-w-[80vw] z-50 bg-primary dark:bg-[#12151B] text-white flex flex-col shadow-2xl transition-transform duration-200 ease-out pt-[max(0.75rem,env(safe-area-inset-top))] pb-[max(0.75rem,env(safe-area-inset-bottom))] border-r border-white/10 dark:border-[#212634] ${
+              isMobileDrawerOpen ? 'translate-x-0' : '-translate-x-full'
+            }`}
+          >
+            {/* Drawer Header */}
+            <div className="p-4 flex items-center justify-between border-b border-white/10 dark:border-[#212634]">
+              <div className="flex items-center space-x-2.5">
+                <Logo size={32} className="shrink-0" />
+                <span className="font-black text-base tracking-wide">DarkMSAL</span>
+              </div>
+              <button
+                onClick={() => setIsMobileDrawerOpen(false)}
+                className="p-1.5 rounded-xl text-white/70 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <Icons.X size={20} />
+              </button>
+            </div>
+
+            {/* User Profile in Drawer */}
+            <div
+              onClick={() => {
+                setIsMobileDrawerOpen(false);
+                navigate('/settings');
+              }}
+              className="p-3.5 mx-3 my-3 rounded-2xl bg-white/10 dark:bg-[#1F2430] border border-white/10 dark:border-[#283245] flex items-center space-x-3 cursor-pointer hover:bg-white/15 transition-all"
+            >
+              {photoUrl ? (
+                <img src={photoUrl} alt="Avatar" className="w-11 h-11 rounded-full object-cover border border-white/30 shrink-0" />
+              ) : (
+                <div className="w-11 h-11 rounded-full bg-accent dark:bg-[#22869A] flex items-center justify-center font-bold text-white text-sm shrink-0">
+                  {getInitials(user?.name)}
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm font-bold text-white truncate">{user?.name || 'Студент'}</h3>
+                <p className="text-[11px] text-white/70 dark:text-[#8E98A8] truncate mt-0.5">{user?.group || 'МГЮА'}</p>
+              </div>
+              <Icons.ChevronRight size={16} className="text-white/40 shrink-0" />
+            </div>
+
+            {/* Quick Actions inside Drawer */}
+            <div className="px-3 space-y-1.5 flex-1 overflow-y-auto">
+              <button
+                onClick={() => {
+                  toggleTheme();
+                }}
+                className="w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-sm font-semibold bg-white/5 hover:bg-white/10 dark:bg-[#1E2430] dark:hover:bg-[#272F3F] text-white transition-all cursor-pointer"
+              >
+                <div className="flex items-center space-x-3">
+                  {isDark ? <Icons.Sun size={18} className="text-amber-400" /> : <Icons.Moon size={18} className="text-sky-300" />}
+                  <span>{isDark ? 'Светлая тема' : 'Тёмная тема'}</span>
+                </div>
+                <span className="text-xs text-white/60 font-normal">{isDark ? 'Вкл' : 'Выкл'}</span>
+              </button>
+
+              <button
+                onClick={handleManualRefresh}
+                disabled={isRefreshing}
+                className="w-full flex items-center space-x-3 px-3.5 py-3 rounded-xl text-sm font-semibold bg-white/5 hover:bg-white/10 dark:bg-[#1E2430] dark:hover:bg-[#272F3F] text-white transition-all disabled:opacity-50 cursor-pointer"
+              >
+                <Icons.Refresh size={18} className={`shrink-0 ${isRefreshing ? 'animate-spin text-accent dark:text-[#38BDF8]' : ''}`} />
+                <span>{isRefreshing ? 'Синхронизация...' : 'Обновить данные'}</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setIsMobileDrawerOpen(false);
+                  navigate('/settings');
+                }}
+                className="w-full flex items-center space-x-3 px-3.5 py-3 rounded-xl text-sm font-semibold bg-white/5 hover:bg-white/10 dark:bg-[#1E2430] dark:hover:bg-[#272F3F] text-white transition-all cursor-pointer"
+              >
+                <Icons.Settings size={18} />
+                <span>Настройки</span>
+              </button>
+            </div>
+
+            {/* Drawer Bottom Actions */}
+            <div className="p-4 border-t border-white/10 dark:border-[#212634] space-y-2">
+              <button
+                onClick={() => {
+                  setIsMobileDrawerOpen(false);
+                  if (window.confirm('Вы действительно хотите выйти из аккаунта?')) {
+                    logout();
+                    navigate('/login');
+                  }
+                }}
+                className="w-full py-2.5 px-3 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 text-xs font-semibold flex items-center justify-center space-x-2 transition-all cursor-pointer"
+              >
+                <Icons.LogOut size={16} />
+                <span>Выйти из аккаунта</span>
+              </button>
+            </div>
+          </aside>
+        </>
+      )}
+
       {/* MAIN VIEW AREA */}
       <div className="flex-1 flex flex-col h-full overflow-hidden">
-        {/* Mobile Header Bar */}
-        <header className="md:hidden flex items-center justify-between px-4 py-3 bg-card dark:bg-[#1F2430] border-b border-border dark:border-[#212634] z-10 shrink-0 pt-[max(0.75rem,env(safe-area-inset-top))]">
-          <div
-            onClick={() => navigate('/settings')}
-            className="flex items-center space-x-3 cursor-pointer hover:opacity-85 transition-opacity"
-            title="Открыть профиль и настройки"
-          >
-            {photoUrl ? (
-              <img src={photoUrl} alt="Avatar" className="w-9 h-9 rounded-full object-cover border border-accent dark:border-[#22869A]" />
-            ) : (
-              <div className="w-9 h-9 rounded-full bg-accent dark:bg-[#22869A] flex items-center justify-center font-bold text-white text-xs">
-                {getInitials(user?.name)}
+        {/* Mobile Header Bar: Standard Topbar OR Minimal Hamburger Header */}
+        {mobileLayoutMode === 'topbar' ? (
+          <header className="md:hidden flex items-center justify-between px-4 py-3 bg-card dark:bg-[#1F2430] border-b border-border dark:border-[#212634] z-10 shrink-0 pt-[max(0.75rem,env(safe-area-inset-top))]">
+            <div
+              onClick={() => navigate('/settings')}
+              className="flex items-center space-x-3 cursor-pointer hover:opacity-85 transition-opacity"
+              title="Открыть профиль и настройки"
+            >
+              {photoUrl ? (
+                <img src={photoUrl} alt="Avatar" className="w-9 h-9 rounded-full object-cover border border-accent dark:border-[#22869A]" />
+              ) : (
+                <div className="w-9 h-9 rounded-full bg-accent dark:bg-[#22869A] flex items-center justify-center font-bold text-white text-xs">
+                  {getInitials(user?.name)}
+                </div>
+              )}
+              <div className="min-w-0">
+                <h2 className="text-sm font-bold text-dark dark:text-white truncate">
+                  {user?.name || 'Студент'}
+                </h2>
+                <p className="text-[11px] text-textMuted dark:text-[#8E98A8] truncate">
+                  {user?.group || 'МГЮА'}
+                </p>
               </div>
-            )}
-            <div className="min-w-0">
-              <h2 className="text-sm font-bold text-dark dark:text-white truncate">
-                {user?.name || 'Студент'}
-              </h2>
-              <p className="text-[11px] text-textMuted dark:text-[#8E98A8] truncate">
-                {user?.group || 'МГЮА'}
-              </p>
             </div>
-          </div>
 
-          <div className="flex items-center space-x-1">
-            <button
-              onClick={toggleTheme}
-              className="p-2 rounded-xl text-textMuted dark:text-[#8E98A8] hover:bg-bg dark:hover:bg-[#262D3D]"
-            >
-              {isDark ? <Icons.Sun size={18} /> : <Icons.Moon size={18} />}
-            </button>
-            <button
-              onClick={() => {
-                logout();
-                navigate('/login');
-              }}
-              className="p-2 rounded-xl text-textMuted dark:text-[#8E98A8] hover:text-rose-500"
-            >
-              <Icons.LogOut size={18} />
-            </button>
-          </div>
-        </header>
+            <div className="flex items-center space-x-1">
+              <button
+                onClick={toggleTheme}
+                className="p-2 rounded-xl text-textMuted dark:text-[#8E98A8] hover:bg-bg dark:hover:bg-[#262D3D]"
+              >
+                {isDark ? <Icons.Sun size={18} /> : <Icons.Moon size={18} />}
+              </button>
+              <button
+                onClick={() => {
+                  logout();
+                  navigate('/login');
+                }}
+                className="p-2 rounded-xl text-textMuted dark:text-[#8E98A8] hover:text-rose-500"
+              >
+                <Icons.LogOut size={18} />
+              </button>
+            </div>
+          </header>
+        ) : null}
 
         {/* Global Offline / Cached Data Banner */}
         {isOffline && (
@@ -291,6 +430,18 @@ export const AppShell = () => {
 
         {/* MOBILE BOTTOM NAVIGATION BAR */}
         <nav className="md:hidden flex items-center justify-around bg-card dark:bg-[#1F2430] border-t border-border dark:border-[#212634] px-1 py-1.5 z-10 shrink-0 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+          {/* If sidebar layout is active, add the Menu trigger as the first item in bottom nav */}
+          {mobileLayoutMode === 'sidebar' && (
+            <button
+              type="button"
+              onClick={() => setIsMobileDrawerOpen(true)}
+              className="flex flex-col items-center py-1 px-2 rounded-xl text-textMuted dark:text-[#8E98A8] hover:text-dark dark:hover:text-white transition-all cursor-pointer"
+            >
+              <Icons.Menu size={20} />
+              <span className="text-[10px] mt-0.5 tracking-tight font-medium">Меню</span>
+            </button>
+          )}
+
           {NAV_ITEMS.map(item => (
             <NavLink
               key={item.to}
@@ -337,3 +488,5 @@ export const AppShell = () => {
     </div>
   );
 };
+
+export default AppShell;
