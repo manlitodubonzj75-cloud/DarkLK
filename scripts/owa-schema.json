@@ -1,0 +1,219 @@
+{
+  "timestamp": "2026-09-27T00:09:36.501Z",
+  "status": {
+    "login": 302,
+    "getFolder": 200,
+    "findItem": 500,
+    "findConversation": 200
+  },
+  "cookiesDetected": [
+    "cadata",
+    "cadataTTL",
+    "cadataKey",
+    "cadataIV",
+    "cadataSig",
+    "ClientId",
+    "UC",
+    "X-OWA-CANARY",
+    "X-BackEndCookie"
+  ],
+  "canaryDetected": true,
+  "folderSchema": {
+    "Header": {
+      "ServerVersionInfo": {
+        "MajorVersion": 15,
+        "MinorVersion": 1,
+        "MajorBuildNumber": 2507,
+        "MinorBuildNumber": 6,
+        "Version": "[REDACTED_STR]"
+      }
+    },
+    "Body": {
+      "ResponseMessages": {
+        "Items": [
+          {
+            "__type": "FolderInfoResponseMessage:#Exchange",
+            "ResponseCode": "NoError",
+            "ResponseClass": "Success",
+            "Folders": [
+              {
+                "__type": "Folder:#Exchange",
+                "FolderId": {
+                  "Id": "AAMkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgAuAAAAAABYdAzzf5NuQKlIU3rh5qRGAQCrgHsR2sLdRqHq9Xbe6x3PAAAAAAEIAAA=",
+                  "ChangeKey": "AQAAABYAAACrgHsR2sLdRqHq9Xbe6x3PAABpfBqc"
+                },
+                "ParentFolderId": {
+                  "Id": "AAMkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgAuAAAAAABYdAzzf5NuQKlIU3rh5qRGAQCrgHsR2sLdRqHq9Xbe6x3PAAAAAAEBAAA=",
+                  "ChangeKey": "AQAAAA=="
+                },
+                "DisplayName": "[REDACTED_STR]",
+                "TotalCount": 0,
+                "ChildFolderCount": 17,
+                "EffectiveRights": {
+                  "CreateAssociated": true,
+                  "CreateContents": true,
+                  "CreateHierarchy": true,
+                  "Delete": true,
+                  "Modify": true,
+                  "Read": true,
+                  "ViewPrivateItems": true
+                },
+                "UnreadCount": 0
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "findItemSchema": null,
+  "findConvSchema": {
+    "Header": {
+      "ServerVersionInfo": {
+        "MajorVersion": 15,
+        "MinorVersion": 1,
+        "MajorBuildNumber": 2507,
+        "MinorBuildNumber": 6,
+        "Version": "[REDACTED_STR]"
+      }
+    },
+    "Body": {
+      "ResponseCode": "NoError",
+      "ResponseClass": "Success",
+      "Conversations": [
+        {
+          "ConversationId": {
+            "Id": "AAQkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgAQAA8QS6ZyXMdMgvJdrlmR1T0="
+          },
+          "ConversationTopic": "[REDACTED_STR]",
+          "UniqueRecipients": [
+            "[REDACTED_STR]"
+          ],
+          "GlobalUniqueRecipients": [
+            "[REDACTED_STR]"
+          ],
+          "UniqueUnreadSenders": [
+            "[REDACTED_STR]"
+          ],
+          "GlobalUniqueUnreadSenders": [
+            "[REDACTED_STR]"
+          ],
+          "UniqueSenders": [
+            "[REDACTED_STR]"
+          ],
+          "GlobalUniqueSenders": [
+            "[REDACTED_STR]"
+          ],
+          "LastDeliveryTime": "[REDACTED_STR]",
+          "GlobalLastDeliveryTime": "[REDACTED_STR]",
+          "HasAttachments": false,
+          "GlobalHasAttachments": false,
+          "MessageCount": 1,
+          "GlobalMessageCount": 1,
+          "UnreadCount": 1,
+          "GlobalUnreadCount": 1,
+          "Size": 8249,
+          "GlobalSize": 8249,
+          "ItemClasses": [
+            "[REDACTED_STR]"
+          ],
+          "GlobalItemClasses": [
+            "[REDACTED_STR]"
+          ],
+          "Importance": "[REDACTED_STR]",
+          "GlobalImportance": "[REDACTED_STR]",
+          "ItemIds": [
+            {
+              "__type": "ItemId:#Exchange",
+              "ChangeKey": "CQAAAA==",
+              "Id": "AAMkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgBGAAAAAABYdAzzf5NuQKlIU3rh5qRGBwCrgHsR2sLdRqHq9Xbe6x3PAAAAAAEMAACrgHsR2sLdRqHq9Xbe6x3PAAHodT6oAAA="
+            }
+          ],
+          "GlobalItemIds": [
+            {
+              "__type": "ItemId:#Exchange",
+              "ChangeKey": "CQAAAA==",
+              "Id": "AAMkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgBGAAAAAABYdAzzf5NuQKlIU3rh5qRGBwCrgHsR2sLdRqHq9Xbe6x3PAAAAAAEMAACrgHsR2sLdRqHq9Xbe6x3PAAHodT6oAAA="
+            }
+          ],
+          "LastModifiedTime": "[REDACTED_STR]",
+          "InstanceKey": "[REDACTED_STR]",
+          "MailboxScope": null,
+          "HasIrm": false,
+          "GlobalHasIrm": false,
+          "IsLocked": false,
+          "FamilyId": {
+            "Id": "AAQkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgAQAA8QS6ZyXMdMgvJdrlmR1T0="
+          }
+        },
+        {
+          "ConversationId": {
+            "Id": "AAQkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgAQAK09jBWWr6BDtYYj1MLHVA4="
+          },
+          "ConversationTopic": "[STRING_LEN_88]",
+          "UniqueRecipients": [
+            "[REDACTED_STR]"
+          ],
+          "GlobalUniqueRecipients": [
+            "[REDACTED_STR]"
+          ],
+          "UniqueUnreadSenders": [
+            "[REDACTED_STR]"
+          ],
+          "GlobalUniqueUnreadSenders": [
+            "[REDACTED_STR]"
+          ],
+          "UniqueSenders": [
+            "[REDACTED_STR]"
+          ],
+          "GlobalUniqueSenders": [
+            "[REDACTED_STR]"
+          ],
+          "LastDeliveryTime": "[REDACTED_STR]",
+          "GlobalLastDeliveryTime": "[REDACTED_STR]",
+          "HasAttachments": false,
+          "GlobalHasAttachments": false,
+          "MessageCount": 1,
+          "GlobalMessageCount": 1,
+          "UnreadCount": 1,
+          "GlobalUnreadCount": 1,
+          "Size": 11787,
+          "GlobalSize": 11787,
+          "ItemClasses": [
+            "[REDACTED_STR]"
+          ],
+          "GlobalItemClasses": [
+            "[REDACTED_STR]"
+          ],
+          "Importance": "[REDACTED_STR]",
+          "GlobalImportance": "[REDACTED_STR]",
+          "ItemIds": [
+            {
+              "__type": "ItemId:#Exchange",
+              "ChangeKey": "CQAAAA==",
+              "Id": "AAMkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgBGAAAAAABYdAzzf5NuQKlIU3rh5qRGBwCrgHsR2sLdRqHq9Xbe6x3PAAAAAAEMAACrgHsR2sLdRqHq9Xbe6x3PAAHodT6nAAA="
+            }
+          ],
+          "GlobalItemIds": [
+            {
+              "__type": "ItemId:#Exchange",
+              "ChangeKey": "CQAAAA==",
+              "Id": "AAMkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgBGAAAAAABYdAzzf5NuQKlIU3rh5qRGBwCrgHsR2sLdRqHq9Xbe6x3PAAAAAAEMAACrgHsR2sLdRqHq9Xbe6x3PAAHodT6nAAA="
+            }
+          ],
+          "LastModifiedTime": "[REDACTED_STR]",
+          "InstanceKey": "[REDACTED_STR]",
+          "MailboxScope": null,
+          "HasIrm": false,
+          "GlobalHasIrm": false,
+          "IsLocked": false,
+          "FamilyId": {
+            "Id": "AAQkADJmOGEwZjkyLTAzM2MtNGJkOC05Nzk3LTMxZDAwN2UwOThhZgAQAK09jBWWr6BDtYYj1MLHVA4="
+          }
+        }
+      ],
+      "IndexedOffset": 10,
+      "TotalConversationsInView": 109
+    }
+  }
+}

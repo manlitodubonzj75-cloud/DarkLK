@@ -17,6 +17,8 @@ dist/
 dist-ssr/
 release/*
 !release/darkmsal.user.js
+!release/DarkMSAL-1.0.apk
+!release/DarkMSAL-1.0.ipa
 out/
 
 # Note: The root "build/" folder contains application icon assets (icon.icns, icon.png)
@@ -25,12 +27,9 @@ out/
 # Electron & Installer Artifacts
 *.dmg
 *.app
-*.apk
 *.aab
 *.exe
 *.AppImage
-*.rpm
-*.deb
 builder-debug.yml
 builder-effective-config.yaml
 .icon-icns/

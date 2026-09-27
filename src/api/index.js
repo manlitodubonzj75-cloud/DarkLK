@@ -2,6 +2,8 @@ export { apiClient } from './client.js';
 export { authService } from './authService.js';
 export { cacheService } from './cacheService.js';
 export { cryptoStorage } from './cryptoStorage.js';
+export { mailClient } from './mailClient.js';
+export { mailService } from './mailService.js';
 export { parseCollegeProgress } from './parsers/collegeParser.js';
 export { parseBachelorProgress } from './parsers/bachelorParser.js';
 export {

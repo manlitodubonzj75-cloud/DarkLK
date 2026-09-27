@@ -14,6 +14,8 @@ export default defineConfig({
   build: {
     outDir: 'dist-userscript',
     emptyOutDir: true,
+    minify: 'esbuild',
+    sourcemap: false,
     lib: {
       entry: path.resolve(__dirname, 'src/userscript-entry.jsx'),
       name: 'DarkMSAL',

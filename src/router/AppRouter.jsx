@@ -8,6 +8,7 @@ import { SchedulePage } from '../pages/Schedule/SchedulePage';
 import { GradesPage } from '../pages/Grades/GradesPage';
 import { RecordbookPage } from '../pages/Recordbook/RecordbookPage';
 import { ConsultationsPage } from '../pages/Consultations/ConsultationsPage';
+import { MailPage } from '../pages/Mail/MailPage';
 import { SettingsPage } from '../pages/Settings/SettingsPage';
 import { NotFoundPage } from '../pages/NotFound/NotFoundPage';
 import { LoadingSpinner } from '../components/common/LoadingSpinner';
@@ -57,6 +58,7 @@ export const AppRouter = () => {
         <Route path="schedule" element={<SchedulePage />} />
         <Route path="grades" element={<GradesPage />} />
         <Route path="recordbook" element={<RecordbookPage />} />
+        <Route path="mail" element={<MailPage />} />
         <Route
           path="consultations"
           element={isCollege ? <Navigate to="/" replace /> : <ConsultationsPage />}

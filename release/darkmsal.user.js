@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         DarkMSAL
-// @namespace    https://github.com/Dewerro67/MSALKA
+// @namespace    https://github.com/manlitodubonzj75-cloud/MSALka-sova-skakalka
 // @version      1.0.0
 // @description  Тёмный современный интерфейс для личного кабинета студента МГЮА (lk.msal.ru)
 // @author       DarkMSAL Team
@@ -16,9 +16,8 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
-// @updateURL    https://raw.githubusercontent.com/Dewerro67/MSALKA/main/release/darkmsal.user.js
-// @downloadURL  https://raw.githubusercontent.com/Dewerro67/MSALKA/main/release/darkmsal.user.js
-// @icon         https://raw.githubusercontent.com/Dewerro67/MSALKA/main/public/logo.png
+// @updateURL    https://raw.githubusercontent.com/manlitodubonzj75-cloud/MSALka-sova-skakalka/main/darkmsal.user.js
+// @downloadURL  https://raw.githubusercontent.com/manlitodubonzj75-cloud/MSALka-sova-skakalka/main/darkmsal.user.js
 // ==/UserScript==
 
 (function() {

@@ -1,5 +1,5 @@
 import React from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { Icons } from '../common/Icons';
@@ -13,6 +13,8 @@ export const AppShell = () => {
   const { user, logout, isCollege, isOffline, isSyncing, lastSyncTime, retrySync } = useAuth();
   const { isDark, toggleTheme } = useTheme();
   const navigate = useNavigate();
+  const location = useLocation();
+  const isMailRoute = location.pathname.startsWith('/mail');
   const [legalModalTab, setLegalModalTab] = React.useState(null);
   const [isRefreshing, setIsRefreshing] = React.useState(false);
   const [updateInfo, setUpdateInfo] = React.useState(null);
@@ -26,6 +28,7 @@ export const AppShell = () => {
     { to: '/schedule', label: 'Расписание', icon: Icons.Calendar },
     { to: '/grades', label: 'Оценки', icon: Icons.GraduationCap },
     { to: '/recordbook', label: 'Зачётка', icon: Icons.BookOpen },
+    { to: '/mail', label: 'Почта', icon: Icons.Mail },
     { to: '/consultations', label: 'Отработки', icon: Icons.UserCheck },
   ];
 
@@ -118,14 +121,9 @@ export const AppShell = () => {
         <div
           onClick={() => navigate('/settings')}
           className="p-4 mx-3 my-4 rounded-2xl bg-white/10 dark:bg-[#1F2430] border border-white/10 dark:border-[#283245] flex items-center space-x-3 cursor-pointer hover:bg-white/15 dark:hover:bg-[#257C9F] transition-all group"
-          title="Открыть профиль и настройки"
         >
           {photoUrl ? (
-            <img
-              src={photoUrl}
-              alt="Avatar"
-              className="w-12 h-12 rounded-full object-cover border-2 border-white/20 dark:border-[#22869A] shrink-0 group-hover:scale-105 transition-transform"
-            />
+            <img src={photoUrl} alt="Avatar" className="w-12 h-12 rounded-full object-cover border-2 border-white/30 dark:border-[#283245] shadow-inner shrink-0 group-hover:scale-105 transition-transform" />
           ) : (
             <div className="w-12 h-12 rounded-full bg-accent dark:bg-[#22869A] flex items-center justify-center font-bold text-base text-white shadow-inner shrink-0 group-hover:scale-105 transition-transform">
               {getInitials(user?.name)}
@@ -178,25 +176,16 @@ export const AppShell = () => {
 
         {/* Legal & version sub-bar */}
         <div className="px-4 py-2 border-t border-white/5 dark:border-[#1E2330] flex items-center justify-between text-[10px] text-white/50 dark:text-[#8E98A8]">
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={() => setLegalModalTab('terms')}
-              className="hover:underline hover:text-white/80"
-            >
-              Условия
-            </button>
-            <span>•</span>
-            <button
-              onClick={() => setLegalModalTab('privacy')}
-              className="hover:underline hover:text-white/80"
-            >
-              Конфиденциальность
-            </button>
-          </div>
-          <span className="font-mono font-semibold text-accent dark:text-[#38BDF8]">v1.0</span>
+          <button
+            onClick={() => setLegalModalTab('privacy')}
+            className="hover:underline hover:text-white/80 transition-colors"
+          >
+            152-ФЗ / Безопасность
+          </button>
+          <span>v1.0.0</span>
         </div>
 
-        {/* Sidebar Footer Controls */}
+        {/* Theme Toggle & Logout */}
         <div className="p-4 border-t border-white/10 dark:border-[#212634] flex items-center justify-between">
           <button
             onClick={toggleTheme}
@@ -287,30 +276,36 @@ export const AppShell = () => {
 
         {/* Scrollable Page Body with Single Root Pull-to-Refresh */}
         <main className="flex-1 overflow-hidden bg-bg dark:bg-[#12151B] w-full min-w-0 flex flex-col">
-          <PullToRefresh>
-            <div className="p-3 sm:p-5 md:p-8 max-w-5xl mx-auto pb-24 md:pb-8 w-full min-w-0">
+          {isMailRoute ? (
+            <div className="h-full w-full flex-1 min-w-0 overflow-hidden flex flex-col pb-16 md:pb-0">
               <Outlet />
             </div>
-          </PullToRefresh>
+          ) : (
+            <PullToRefresh>
+              <div className="p-3 sm:p-5 md:p-8 max-w-5xl mx-auto pb-24 md:pb-8 w-full min-w-0">
+                <Outlet />
+              </div>
+            </PullToRefresh>
+          )}
         </main>
 
         {/* MOBILE BOTTOM NAVIGATION BAR */}
-        <nav className="md:hidden flex items-center justify-around bg-card dark:bg-[#1F2430] border-t border-border dark:border-[#212634] px-2 py-2 z-10 shrink-0 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        <nav className="md:hidden flex items-center justify-around bg-card dark:bg-[#1F2430] border-t border-border dark:border-[#212634] px-1 py-1.5 z-10 shrink-0 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
           {NAV_ITEMS.map(item => (
             <NavLink
               key={item.to}
               to={item.to}
               end={item.to === '/'}
               className={({ isActive }) =>
-                `flex flex-col items-center py-1 px-3 rounded-xl transition-all ${
+                `flex flex-col items-center py-1 px-2 rounded-xl transition-all ${
                   isActive
                     ? 'text-primary dark:text-[#38BDF8] font-bold scale-105'
                     : 'text-textMuted dark:text-[#8E98A8] hover:text-dark dark:hover:text-white'
                 }`
               }
             >
-              <item.icon size={22} />
-              <span className="text-[10px] mt-1 tracking-tight">{item.label}</span>
+              <item.icon size={20} />
+              <span className="text-[10px] mt-0.5 tracking-tight">{item.label}</span>
             </NavLink>
           ))}
         </nav>
@@ -328,11 +323,7 @@ export const AppShell = () => {
           initialTab="terms"
           showAcceptButton={true}
           onClose={() => {
-            logout();
-            navigate("/login");
-          }}
-          onAccept={() => {
-            localStorage.setItem("msal_legal_accepted_v1", String(Date.now()));
+            localStorage.setItem("msal_legal_accepted_v1", "true");
             setShowLegalGate(false);
           }}
         />

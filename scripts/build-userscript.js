@@ -50,6 +50,10 @@ const header = `// ==UserScript==
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
+// @grant        GM_xmlhttpRequest
+// @grant        GM.xmlHttpRequest
+// @connect      mail.msal.ru
+// @connect      lk.msal.ru
 // @updateURL    https://raw.githubusercontent.com/Dewerro67/MSALKA/main/release/darkmsal.user.js
 // @downloadURL  https://raw.githubusercontent.com/Dewerro67/MSALKA/main/release/darkmsal.user.js
 // @icon         https://raw.githubusercontent.com/Dewerro67/MSALKA/main/public/logo.png

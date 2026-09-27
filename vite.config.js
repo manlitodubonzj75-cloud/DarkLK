@@ -13,6 +13,12 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
         rewrite: (path) => path.replace(/^\/api/, '')
+      },
+      '/owa-proxy': {
+        target: 'https://mail.msal.ru',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/owa-proxy/, '')
       }
     }
   },
