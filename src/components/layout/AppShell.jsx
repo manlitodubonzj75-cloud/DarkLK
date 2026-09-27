@@ -23,12 +23,12 @@ export const AppShell = () => {
     return !Boolean(localStorage.getItem("msal_legal_accepted_v1"));
   });
 
-  // Mobile layout mode: 'topbar' vs 'sidebar' (moves topbar buttons to side drawer)
+  // Mobile layout mode: 'bottombar' vs 'sidebar' (hides bottom nav completely, puts all navigation + actions into sidebar drawer)
   const [mobileLayoutMode, setMobileLayoutMode] = useState(() => {
     try {
-      return localStorage.getItem('msal_mobile_layout_mode') || 'topbar';
+      return localStorage.getItem('msal_mobile_layout_mode') || 'bottombar';
     } catch (_) {
-      return 'topbar';
+      return 'bottombar';
     }
   });
 
@@ -249,7 +249,7 @@ export const AppShell = () => {
 
           {/* Drawer Sheet */}
           <aside
-            className={`md:hidden fixed top-0 bottom-0 left-0 w-72 max-w-[80vw] z-50 bg-primary dark:bg-[#12151B] text-white flex flex-col shadow-2xl transition-transform duration-200 ease-out pt-[max(0.75rem,env(safe-area-inset-top))] pb-[max(0.75rem,env(safe-area-inset-bottom))] border-r border-white/10 dark:border-[#212634] ${
+            className={`md:hidden fixed top-0 bottom-0 left-0 w-72 max-w-[82vw] z-50 bg-primary dark:bg-[#12151B] text-white flex flex-col shadow-2xl transition-transform duration-200 ease-out pt-[max(0.75rem,env(safe-area-inset-top))] pb-[max(0.75rem,env(safe-area-inset-bottom))] border-r border-white/10 dark:border-[#212634] ${
               isMobileDrawerOpen ? 'translate-x-0' : '-translate-x-full'
             }`}
           >
@@ -289,13 +289,38 @@ export const AppShell = () => {
               <Icons.ChevronRight size={16} className="text-white/40 shrink-0" />
             </div>
 
-            {/* Quick Actions inside Drawer */}
-            <div className="px-3 space-y-1.5 flex-1 overflow-y-auto">
+            {/* All Navigation Links inside Drawer */}
+            <nav className="flex-1 px-3 space-y-1 overflow-y-auto no-scrollbar">
+              <div className="px-2 py-1 text-[11px] font-bold uppercase tracking-wider text-white/50">
+                Разделы
+              </div>
+              {NAV_ITEMS.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.to === '/'}
+                  onClick={() => setIsMobileDrawerOpen(false)}
+                  className={({ isActive }) =>
+                    `flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                      isActive
+                        ? 'bg-white/20 dark:bg-[#1E6685] text-white shadow-md'
+                        : 'text-white/80 dark:text-[#8E98A8] hover:bg-white/10 dark:hover:bg-[#1E2430] hover:text-white'
+                    }`
+                  }
+                >
+                  <item.icon size={20} className="shrink-0" />
+                  <span className="truncate">{item.label}</span>
+                </NavLink>
+              ))}
+            </nav>
+
+            {/* Quick Actions and Settings */}
+            <div className="p-3 border-t border-white/10 dark:border-[#212634] space-y-1.5">
               <button
                 onClick={() => {
                   toggleTheme();
                 }}
-                className="w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-sm font-semibold bg-white/5 hover:bg-white/10 dark:bg-[#1E2430] dark:hover:bg-[#272F3F] text-white transition-all cursor-pointer"
+                className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-semibold bg-white/5 hover:bg-white/10 dark:bg-[#1E2430] dark:hover:bg-[#272F3F] text-white transition-all cursor-pointer"
               >
                 <div className="flex items-center space-x-3">
                   {isDark ? <Icons.Sun size={18} className="text-amber-400" /> : <Icons.Moon size={18} className="text-sky-300" />}
@@ -307,7 +332,7 @@ export const AppShell = () => {
               <button
                 onClick={handleManualRefresh}
                 disabled={isRefreshing}
-                className="w-full flex items-center space-x-3 px-3.5 py-3 rounded-xl text-sm font-semibold bg-white/5 hover:bg-white/10 dark:bg-[#1E2430] dark:hover:bg-[#272F3F] text-white transition-all disabled:opacity-50 cursor-pointer"
+                className="w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold bg-white/5 hover:bg-white/10 dark:bg-[#1E2430] dark:hover:bg-[#272F3F] text-white transition-all disabled:opacity-50 cursor-pointer"
               >
                 <Icons.Refresh size={18} className={`shrink-0 ${isRefreshing ? 'animate-spin text-accent dark:text-[#38BDF8]' : ''}`} />
                 <span>{isRefreshing ? 'Синхронизация...' : 'Обновить данные'}</span>
@@ -318,7 +343,7 @@ export const AppShell = () => {
                   setIsMobileDrawerOpen(false);
                   navigate('/settings');
                 }}
-                className="w-full flex items-center space-x-3 px-3.5 py-3 rounded-xl text-sm font-semibold bg-white/5 hover:bg-white/10 dark:bg-[#1E2430] dark:hover:bg-[#272F3F] text-white transition-all cursor-pointer"
+                className="w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold bg-white/5 hover:bg-white/10 dark:bg-[#1E2430] dark:hover:bg-[#272F3F] text-white transition-all cursor-pointer"
               >
                 <Icons.Settings size={18} />
                 <span>Настройки</span>
@@ -326,7 +351,7 @@ export const AppShell = () => {
             </div>
 
             {/* Drawer Bottom Actions */}
-            <div className="p-4 border-t border-white/10 dark:border-[#212634] space-y-2">
+            <div className="p-3 border-t border-white/10 dark:border-[#212634]">
               <button
                 onClick={() => {
                   setIsMobileDrawerOpen(false);
@@ -347,50 +372,96 @@ export const AppShell = () => {
 
       {/* MAIN VIEW AREA */}
       <div className="flex-1 flex flex-col h-full overflow-hidden">
-        {/* Mobile Header Bar: Standard Topbar OR Minimal Hamburger Header */}
-        {mobileLayoutMode === 'topbar' ? (
-          <header className="md:hidden flex items-center justify-between px-4 py-3 bg-card dark:bg-[#1F2430] border-b border-border dark:border-[#212634] z-10 shrink-0 pt-[max(0.75rem,env(safe-area-inset-top))]">
-            <div
-              onClick={() => navigate('/settings')}
-              className="flex items-center space-x-3 cursor-pointer hover:opacity-85 transition-opacity"
-              title="Открыть профиль и настройки"
-            >
-              {photoUrl ? (
-                <img src={photoUrl} alt="Avatar" className="w-9 h-9 rounded-full object-cover border border-accent dark:border-[#22869A]" />
-              ) : (
-                <div className="w-9 h-9 rounded-full bg-accent dark:bg-[#22869A] flex items-center justify-center font-bold text-white text-xs">
-                  {getInitials(user?.name)}
-                </div>
-              )}
-              <div className="min-w-0">
-                <h2 className="text-sm font-bold text-dark dark:text-white truncate">
-                  {user?.name || 'Студент'}
-                </h2>
-                <p className="text-[11px] text-textMuted dark:text-[#8E98A8] truncate">
-                  {user?.group || 'МГЮА'}
-                </p>
+        {/* Mobile Header Bar */}
+        <header className="md:hidden flex items-center justify-between px-4 py-3 bg-card dark:bg-[#1F2430] border-b border-border dark:border-[#212634] z-10 shrink-0 pt-[max(0.75rem,env(safe-area-inset-top))]">
+          {mobileLayoutMode === 'sidebar' ? (
+            /* Sidebar Mode Header: Menu hamburger + Title/Route, Theme and Profile button */
+            <div className="flex items-center justify-between w-full">
+              <button
+                type="button"
+                onClick={() => setIsMobileDrawerOpen(true)}
+                className="p-2 -ml-2 rounded-xl text-dark dark:text-white hover:bg-bg dark:hover:bg-[#262D3D] transition-colors cursor-pointer"
+                title="Открыть меню"
+              >
+                <Icons.Menu size={22} />
+              </button>
+
+              <div
+                onClick={() => navigate('/')}
+                className="flex items-center space-x-2 cursor-pointer"
+              >
+                <Logo size={26} className="shrink-0" />
+                <span className="font-black text-base tracking-wide text-dark dark:text-white">DarkMSAL</span>
+              </div>
+
+              <div className="flex items-center space-x-1">
+                <button
+                  onClick={toggleTheme}
+                  className="p-2 rounded-xl text-textMuted dark:text-[#8E98A8] hover:bg-bg dark:hover:bg-[#262D3D]"
+                  title="Переключить тему"
+                >
+                  {isDark ? <Icons.Sun size={18} /> : <Icons.Moon size={18} />}
+                </button>
+                <button
+                  onClick={() => navigate('/settings')}
+                  className="p-1 rounded-full border border-accent dark:border-[#22869A] shrink-0"
+                  title="Настройки"
+                >
+                  {photoUrl ? (
+                    <img src={photoUrl} alt="Avatar" className="w-6 h-6 rounded-full object-cover" />
+                  ) : (
+                    <div className="w-6 h-6 rounded-full bg-accent dark:bg-[#22869A] flex items-center justify-center font-bold text-white text-[10px]">
+                      {getInitials(user?.name)}
+                    </div>
+                  )}
+                </button>
               </div>
             </div>
+          ) : (
+            /* Standard Mode Header: User avatar + info, theme toggle and logout */
+            <>
+              <div
+                onClick={() => navigate('/settings')}
+                className="flex items-center space-x-3 cursor-pointer hover:opacity-85 transition-opacity"
+                title="Открыть профиль и настройки"
+              >
+                {photoUrl ? (
+                  <img src={photoUrl} alt="Avatar" className="w-9 h-9 rounded-full object-cover border border-accent dark:border-[#22869A]" />
+                ) : (
+                  <div className="w-9 h-9 rounded-full bg-accent dark:bg-[#22869A] flex items-center justify-center font-bold text-white text-xs">
+                    {getInitials(user?.name)}
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <h2 className="text-sm font-bold text-dark dark:text-white truncate">
+                    {user?.name || 'Студент'}
+                  </h2>
+                  <p className="text-[11px] text-textMuted dark:text-[#8E98A8] truncate">
+                    {user?.group || 'МГЮА'}
+                  </p>
+                </div>
+              </div>
 
-            <div className="flex items-center space-x-1">
-              <button
-                onClick={toggleTheme}
-                className="p-2 rounded-xl text-textMuted dark:text-[#8E98A8] hover:bg-bg dark:hover:bg-[#262D3D]"
-              >
-                {isDark ? <Icons.Sun size={18} /> : <Icons.Moon size={18} />}
-              </button>
-              <button
-                onClick={() => {
-                  logout();
-                  navigate('/login');
-                }}
-                className="p-2 rounded-xl text-textMuted dark:text-[#8E98A8] hover:text-rose-500"
-              >
-                <Icons.LogOut size={18} />
-              </button>
-            </div>
-          </header>
-        ) : null}
+              <div className="flex items-center space-x-1">
+                <button
+                  onClick={toggleTheme}
+                  className="p-2 rounded-xl text-textMuted dark:text-[#8E98A8] hover:bg-bg dark:hover:bg-[#262D3D]"
+                >
+                  {isDark ? <Icons.Sun size={18} /> : <Icons.Moon size={18} />}
+                </button>
+                <button
+                  onClick={() => {
+                    logout();
+                    navigate('/login');
+                  }}
+                  className="p-2 rounded-xl text-textMuted dark:text-[#8E98A8] hover:text-rose-500"
+                >
+                  <Icons.LogOut size={18} />
+                </button>
+              </div>
+            </>
+          )}
+        </header>
 
         {/* Global Offline / Cached Data Banner */}
         {isOffline && (
@@ -416,50 +487,40 @@ export const AppShell = () => {
         {/* Scrollable Page Body with Single Root Pull-to-Refresh */}
         <main className="flex-1 overflow-hidden bg-bg dark:bg-[#12151B] w-full min-w-0 flex flex-col">
           {isMailRoute ? (
-            <div className="h-full w-full flex-1 min-w-0 overflow-hidden flex flex-col pb-16 md:pb-0">
+            <div className={`h-full w-full flex-1 min-w-0 overflow-hidden flex flex-col ${mobileLayoutMode === 'sidebar' ? 'pb-0' : 'pb-16'} md:pb-0`}>
               <Outlet />
             </div>
           ) : (
             <PullToRefresh>
-              <div className="p-3 sm:p-5 md:p-8 max-w-5xl mx-auto pb-24 md:pb-8 w-full min-w-0">
+              <div className={`p-3 sm:p-5 md:p-8 max-w-5xl mx-auto ${mobileLayoutMode === 'sidebar' ? 'pb-8' : 'pb-24'} md:pb-8 w-full min-w-0`}>
                 <Outlet />
               </div>
             </PullToRefresh>
           )}
         </main>
 
-        {/* MOBILE BOTTOM NAVIGATION BAR */}
-        <nav className="md:hidden flex items-center justify-around bg-card dark:bg-[#1F2430] border-t border-border dark:border-[#212634] px-1 py-1.5 z-10 shrink-0 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-          {/* If sidebar layout is active, add the Menu trigger as the first item in bottom nav */}
-          {mobileLayoutMode === 'sidebar' && (
-            <button
-              type="button"
-              onClick={() => setIsMobileDrawerOpen(true)}
-              className="flex flex-col items-center py-1 px-2 rounded-xl text-textMuted dark:text-[#8E98A8] hover:text-dark dark:hover:text-white transition-all cursor-pointer"
-            >
-              <Icons.Menu size={20} />
-              <span className="text-[10px] mt-0.5 tracking-tight font-medium">Меню</span>
-            </button>
-          )}
-
-          {NAV_ITEMS.map(item => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === '/'}
-              className={({ isActive }) =>
-                `flex flex-col items-center py-1 px-2 rounded-xl transition-all ${
-                  isActive
-                    ? 'text-primary dark:text-[#38BDF8] font-bold scale-105'
-                    : 'text-textMuted dark:text-[#8E98A8] hover:text-dark dark:hover:text-white'
-                }`
-              }
-            >
-              <item.icon size={20} />
-              <span className="text-[10px] mt-0.5 tracking-tight">{item.label}</span>
-            </NavLink>
-          ))}
-        </nav>
+        {/* MOBILE BOTTOM NAVIGATION BAR (shown ONLY in bottombar mode) */}
+        {mobileLayoutMode === 'bottombar' && (
+          <nav className="md:hidden flex items-center justify-around bg-card dark:bg-[#1F2430] border-t border-border dark:border-[#212634] px-1 py-1.5 z-10 shrink-0 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+            {NAV_ITEMS.map(item => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.to === '/'}
+                className={({ isActive }) =>
+                  `flex flex-col items-center py-1 px-2 rounded-xl transition-all ${
+                    isActive
+                      ? 'text-primary dark:text-[#38BDF8] font-bold scale-105'
+                      : 'text-textMuted dark:text-[#8E98A8] hover:text-dark dark:hover:text-white'
+                  }`
+                }
+              >
+                <item.icon size={20} />
+                <span className="text-[10px] mt-0.5 tracking-tight">{item.label}</span>
+              </NavLink>
+            ))}
+          </nav>
+        )}
       </div>
 
       <LegalModal

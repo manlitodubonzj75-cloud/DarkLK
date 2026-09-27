@@ -57,8 +57,8 @@ export const SettingsPage = () => {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateStatus, setUpdateStatus] = useState(null);
 
-  // Topbar vs Sidebar Drawer layout preference
-  const [useSidebarDrawer, setUseSidebarDrawer] = useState(() => {
+  // Bottom bar vs Sidebar Navigation mode
+  const [useSidebarNav, setUseSidebarNav] = useState(() => {
     try {
       return localStorage.getItem('msal_mobile_layout_mode') === 'sidebar';
     } catch (_) {
@@ -70,11 +70,11 @@ export const SettingsPage = () => {
   const platformLabel = platform === 'userscript' ? 'Userscript (Safari / Web)' : platform === 'ios' ? 'Apple iOS' : platform === 'android' ? 'Android' : platform === 'mac' ? 'macOS' : platform === 'win' ? 'Windows' : 'Web';
 
   const handleToggleMobileLayout = () => {
-    const nextVal = !useSidebarDrawer;
-    setUseSidebarDrawer(nextVal);
+    const nextVal = !useSidebarNav;
+    setUseSidebarNav(nextVal);
     try {
-      localStorage.setItem('msal_mobile_layout_mode', nextVal ? 'sidebar' : 'topbar');
-      window.dispatchEvent(new CustomEvent('msal_mobile_layout_changed', { detail: nextVal ? 'sidebar' : 'topbar' }));
+      localStorage.setItem('msal_mobile_layout_mode', nextVal ? 'sidebar' : 'bottombar');
+      window.dispatchEvent(new CustomEvent('msal_mobile_layout_changed', { detail: nextVal ? 'sidebar' : 'bottombar' }));
     } catch (_) {}
   };
 
@@ -170,7 +170,7 @@ export const SettingsPage = () => {
       <div>
         <h1 className="text-2xl font-black text-dark">Настройки</h1>
         <p className="text-xs text-textMuted mt-1">
-          Управление профилем, внешним видом и безопасностью
+          Управление профилем, внешним видом и навигацией
         </p>
       </div>
 
@@ -226,10 +226,10 @@ export const SettingsPage = () => {
         )}
       </Card>
 
-      {/* Appearance Section */}
+      {/* Appearance & Navigation Section */}
       <div>
         <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted mb-3 px-1">
-          Внешний вид и интерфейс
+          Внешний вид и навигация
         </h3>
         <Card className="p-0 overflow-hidden divide-y divide-border">
           {/* Theme Switcher */}
@@ -258,18 +258,18 @@ export const SettingsPage = () => {
             </button>
           </div>
 
-          {/* Topbar vs Sidebar Drawer Toggle (Mobile) */}
+          {/* Bottom Bar vs Sidebar Drawer Navigation Toggle */}
           <div className="p-4 flex items-center justify-between">
             <div className="flex items-center space-x-3">
               <div className="p-2 rounded-xl bg-bg text-dark">
                 <Icons.Menu size={20} />
               </div>
               <div>
-                <h4 className="text-sm font-bold text-dark">Кнопки топбара в боковое меню</h4>
+                <h4 className="text-sm font-bold text-dark">Боковое меню навигации</h4>
                 <p className="text-xs text-textMuted">
-                  {useSidebarDrawer
-                    ? 'Топбар скрыт, кнопки доступны через выкатное боковое меню'
-                    : 'Стандартный верхний топбар с кнопками профиля, темы и выхода'}
+                  {useSidebarNav
+                    ? 'Нижний бар скрыт, все разделы открываются через боковую панель'
+                    : 'Стандартная нижняя панель навигации'}
                 </p>
               </div>
             </div>
@@ -277,12 +277,12 @@ export const SettingsPage = () => {
             <button
               onClick={handleToggleMobileLayout}
               className={`w-12 h-7 rounded-full p-1 transition-colors duration-150 ease-in-out shrink-0 ${
-                useSidebarDrawer ? 'bg-secondary' : 'bg-gray-300 dark:bg-gray-700'
+                useSidebarNav ? 'bg-secondary' : 'bg-gray-300 dark:bg-gray-700'
               }`}
             >
               <div
                 className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform duration-150 ease-in-out ${
-                  useSidebarDrawer ? 'translate-x-5' : 'translate-x-0'
+                  useSidebarNav ? 'translate-x-5' : 'translate-x-0'
                 }`}
               />
             </button>
