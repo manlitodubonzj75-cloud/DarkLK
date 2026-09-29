@@ -1,37 +1,27 @@
-/**
- * Bachelor LK Parser Module
- * Specialized parsing engine for Bachelor and Specialist degree students of MSAL (МГЮА).
- *
- * Characteristics of Bachelor LK:
- * - BARS point-rating system (0..100 score, Module 1, Module 2)
- * - Academic hours for absences (passes)
- * - Exam / Credit admission statuses (accessTotal)
- * - Bulk details fetching with fallback per-discipline queue
- */
+import { safeArray } from '../lkUtils.js';
 
-import { runWithConcurrency } from "../utils/concurrency.js";
-
-function normalizeDisciplineName(name) {
-  if (!name) return "";
-  return name.toLowerCase().replace(/[^a-zа-я0-9]/gi, "").trim();
-}
-
-function parseScore(val) {
-  if (val === null || val === undefined || val === "") return 0;
-  if (typeof val === "number") return isNaN(val) ? 0 : val;
-  const cleaned = String(val).replace(",", ".").replace(/[^0-9.]/g, "");
-  const n = parseFloat(cleaned);
-  return isNaN(n) ? 0 : n;
+function parseNumber(val) {
+  if (typeof val === 'number') return val;
+  if (!val) return 0;
+  const num = parseFloat(String(val).replace(',', '.'));
+  return isNaN(num) ? 0 : num;
 }
 
 function parseGrade(val) {
-  if (val === null || val === undefined || val === "") return 0;
-  const num = parseInt(val, 10);
+  if (typeof val === 'number') return val;
+  if (!val) return 0;
+  const s = String(val).toLowerCase().trim();
+  if (s.includes('отличн') || s === '5') return 5;
+  if (s.includes('хорош') || s === '4') return 4;
+  if (s.includes('удовл') || s === '3') return 3;
+  if (s.includes('неуд') || s === '2') return 2;
+  if (s.includes('зач') && !s.includes('не зач') && !s.includes('незач')) return 5;
+  const num = parseInt(s, 10);
   if (!isNaN(num) && num >= 2 && num <= 5) return num;
   return 0;
 }
 
-function filterSemesterProgress(data = [], course, semester) {
+export function filterSemesterProgress(data = [], course, semester) {
   if (!Array.isArray(data) || data.length === 0) return [];
   const c = Number(course);
   const s = Number(semester);
@@ -48,262 +38,87 @@ function filterSemesterProgress(data = [], course, semester) {
 
   // Level 2: Root level has disciplines array
   for (const item of data) {
-    if ((Number(item.course) === c || Number(item.coures) === c) &&
-        (Number(item.semester) === s || Number(item.semestr) === s)) {
-      if (Array.isArray(item.disciplines) && item.disciplines.length > 0) {
-        return item.disciplines;
-      }
+    if (Array.isArray(item.disciplines)) {
+      const filtered = item.disciplines.filter(d => {
+        const itemSem = Number(d.semester || d.sem);
+        return itemSem === s;
+      });
+      if (filtered.length > 0) return filtered;
     }
   }
 
-  // Level 3: Flat array of disciplines matching course and semester
-  const directMatches = data.filter(d => {
-    const matchCourse = !d.course || Number(d.course) === c || Number(d.coures) === c;
-    const matchSem = !d.semester || Number(d.semester) === s || Number(d.semestr) === s;
-    return matchCourse && matchSem;
+  // Level 3: Array of disciplines itself
+  const directMatch = data.filter(d => {
+    const itemSem = Number(d.semester || d.sem);
+    return itemSem === s;
   });
+  if (directMatch.length > 0) return directMatch;
 
-  if (directMatches.length > 0 && directMatches.some(d => d.discipline || d.name)) {
-    return directMatches;
-  }
-
-  // Level 4: Return any non-empty array with discipline names
-  return data.filter(d => d.discipline || d.name || d.guid);
+  return data;
 }
 
-/**
- * Parses and enriches Bachelor progress data.
- */
-export async function parseBachelorProgress(
-  rawProgress,
-  activeCourse,
-  activeSemester,
-  studentInfo,
-  context = {}
-) {
-  const { apiClient, cacheService, getProgressDetails, options } = context;
+export function parseBachelorProgress(rawProgress = [], activeCourse = 1, activeSemester = 1) {
   const targetDisciplines = filterSemesterProgress(rawProgress, activeCourse, activeSemester);
+  const disciplines = [];
+  const gradeDistribution = { 5: 0, 4: 0, 3: 0, 2: 0 };
+  let totalGrades = 0;
+  let gradeSum = 0;
+  let passes = 0;
+  let unadmittedCount = 0;
 
-  // 1. Fetch bulk progress details
-  let bulkDetails = [];
-  try {
-    if (typeof getProgressDetails === "function") {
-      bulkDetails = await getProgressDetails(activeCourse, activeSemester, null, options);
-    } else if (typeof apiClient === "function") {
-      const res = await apiClient(`/progress/details?course=${activeCourse}&semester=${activeSemester}`).catch(() => []);
-      bulkDetails = Array.isArray(res) ? res : [];
+  for (const disc of targetDisciplines) {
+    const name = disc.discipline || disc.name || disc.subject || 'Дисциплина';
+    const type = disc.controlType || disc.type || '';
+    const points = parseNumber(disc.points || disc.totalPoints || disc.currentPoints);
+    const mark = disc.grade || disc.mark || '';
+    const numGrade = parseGrade(mark);
+
+    if (numGrade >= 2 && numGrade <= 5) {
+      gradeDistribution[numGrade]++;
+      gradeSum += numGrade;
+      totalGrades++;
     }
-  } catch (_) {}
 
-  const detailsMap = new Map();
-  if (Array.isArray(bulkDetails)) {
-    bulkDetails.forEach((det) => {
-      const key = normalizeDisciplineName(det.discipline || det.name);
-      if (key) detailsMap.set(key, det);
+    const discPasses = parseNumber(disc.missedHours || disc.passes || disc.absences);
+    passes += discPasses;
+
+    const isAdmitted = disc.isAdmitted !== undefined ? Boolean(disc.isAdmitted) : (points >= 30 || numGrade >= 3);
+    if (!isAdmitted) {
+      unadmittedCount++;
+    }
+
+    const modules = safeArray(disc.modules || disc.controlPoints || disc.subPoints).map(m => ({
+      name: m.name || m.title || 'Модуль',
+      points: parseNumber(m.points || m.score),
+      maxPoints: parseNumber(m.maxPoints),
+      grade: m.grade || m.mark || ''
+    }));
+
+    disciplines.push({
+      id: disc.id || disc.guid || `${name}_${disciplines.length}`,
+      name,
+      type,
+      points,
+      mark,
+      passes: discPasses,
+      isAdmitted,
+      professors: safeArray(disc.teachers || disc.professors).map(t => typeof t === 'string' ? t : t.name),
+      modules
     });
   }
 
-  // 2. Fetch missing individual details with concurrency limit
-  if (targetDisciplines.length > 0 && typeof apiClient === "function") {
-    const needsFetch = targetDisciplines.filter((d) => {
-      const key = normalizeDisciplineName(d.name || d.discipline);
-      const existing = detailsMap.get(key);
-      return !existing || !Array.isArray(existing.modules) || existing.modules.length === 0;
-    }).slice(0, 15);
-
-    if (needsFetch.length > 0) {
-      const taskFns = needsFetch.map((d) => async () => {
-        const guid = d.guid || d.disciplineId || d.disciplineID || d.id;
-        if (!guid) return null;
-        try {
-          const res = await apiClient(
-            `/progress/details?disciplineID=${guid}&course=${activeCourse}&semester=${activeSemester}`,
-            { timeout: 8000 }
-          );
-          const detObj = Array.isArray(res) ? res[0] : res;
-          if (detObj) {
-            const key = normalizeDisciplineName(detObj.discipline || d.name || d.discipline);
-            return { key, data: detObj };
-          }
-        } catch (_) {}
-        return null;
-      });
-
-      const results = await runWithConcurrency(taskFns, 3);
-      results.forEach((r) => {
-        if (r.status === "fulfilled" && r.value && r.value.key) {
-          detailsMap.set(r.value.key, r.value.data);
-        }
-      });
-    }
-  }
-
-  let totalPasses = 0;
-  let allGrades = [];
-  let allModuleScores = [];
-  let allMissedLessons = [];
-  let unadmittedCount = 0;
-
-  const baseList = targetDisciplines.length > 0 ? targetDisciplines : Array.from(detailsMap.values());
-
-  const enrichedDisciplines = baseList.map((d, idx) => {
-    const discName = (d.name || d.discipline || d.title || `Дисциплина #${idx + 1}`).trim();
-    const normName = normalizeDisciplineName(discName);
-
-    let detail = detailsMap.get(normName);
-    if (!detail) {
-      for (const [k, v] of detailsMap.entries()) {
-        if (k.includes(normName) || normName.includes(k)) {
-          detail = v;
-          break;
-        }
-      }
-    }
-    if (!detail && d.modules) {
-      detail = d;
-    }
-
-    let passes = 0;
-    let discGrades = [];
-    let moduleScores = [];
-    let rawModules = [];
-    let access = true;
-    let info = "";
-
-    if (detail) {
-      if (detail.accessTotal !== undefined) {
-        access = detail.accessTotal === 1 || detail.accessTotal === true || String(detail.accessTotal).toLowerCase() === "true";
-      } else if (detail.access !== undefined) {
-        access = detail.access === true || detail.access === 1 || String(detail.access).toLowerCase() === "true";
-      }
-
-      info = (detail.debtReport || detail.info || "").toString().replace(/[\r\n]+/g, " ").trim();
-
-      rawModules = Array.isArray(detail.modules) ? detail.modules : [];
-
-      // Parse BARS Modules
-      rawModules.forEach((m) => {
-        const modScore = parseScore(m.mediumScore ?? m.score ?? m.points ?? m.ball);
-        const modName = (m.module || m.name || "БМ").toString().trim();
-
-        moduleScores.push({
-          name: modName,
-          score: modScore,
-          displayScore: `${modScore} б.`
-        });
-
-        if (modScore > 0) {
-          allModuleScores.push(modScore);
-        }
-
-        if (Array.isArray(m.themes)) {
-          m.themes.forEach((t) => {
-            if (Array.isArray(t.items)) {
-              t.items.forEach((it) => {
-                const isMissed = it.missed === 1 || it.missed === "1" || it.turnout === false || it.turnout === "false";
-                if (isMissed) {
-                  passes++;
-                  totalPasses++;
-                  allMissedLessons.push({
-                    discipline: discName,
-                    date: it.date || t.date || '',
-                    teacher: it.teacher || (Array.isArray(d.professors) ? d.professors[0] : (d.teacher || '')),
-                    theme: it.theme || t.theme || it.name || 'Занятие',
-                    subgroup: it.subgroup || 0
-                  });
-                }
-
-                let grade = parseGrade(it.ball);
-                if (grade === 0 && it.ratings) {
-                  const rList = Array.isArray(it.ratings) ? it.ratings : [it.ratings];
-                  for (const r of rList) {
-                    const parsed = parseGrade(r);
-                    if (parsed > 0) { grade = parsed; break; }
-                  }
-                }
-                if (grade === 0 && it.grades) {
-                  const gList = Array.isArray(it.grades) ? it.grades : [it.grades];
-                  for (const g of gList) {
-                    const parsed = parseGrade(g);
-                    if (parsed > 0) { grade = parsed; break; }
-                  }
-                }
-
-                if (grade > 0) {
-                  discGrades.push(grade);
-                  allGrades.push(grade);
-                }
-              });
-            }
-          });
-        }
-      });
-    } else {
-      if (d.accessTotal !== undefined) {
-        access = d.accessTotal === 1 || d.accessTotal === true || String(d.accessTotal).toLowerCase() === "true";
-      } else if (d.access !== undefined) {
-        access = d.access === true || d.access === 1 || String(d.access).toLowerCase() === "true";
-      }
-    }
-
-    if (!access) unadmittedCount++;
-
-    // Average only over modules that already have points (unfilled modules are 0, not a real score)
-    const filledModuleScores = moduleScores.filter((m) => m.score > 0);
-    const avgGrade = discGrades.length > 0
-      ? (discGrades.reduce((a, b) => a + b, 0) / discGrades.length).toFixed(2)
-      : (filledModuleScores.length > 0
-          ? (filledModuleScores.reduce((sum, m) => sum + m.score, 0) / filledModuleScores.length).toFixed(2)
-          : null);
-
-    const totalBars = moduleScores.reduce((sum, m) => sum + m.score, 0);
-
-    return {
-      id: d.guid || d.id || idx,
-      name: discName,
-      type: d.type || detailsMap.get(normName)?.controlType || "Дисциплина",
-      professors: d.professors || (d.teacher ? [d.teacher] : []),
-      access,
-      isAdmitted: access,
-      info,
-      passes,
-      grades: discGrades,
-      avgGrade,
-      barsScore: totalBars > 0 ? totalBars.toFixed(2) : null,
-      moduleScores,
-      modules: rawModules
-    };
-  });
-
-  // If detailed calculation didn't find any missed lessons, check studentInfo fallback
-  if (totalPasses === 0 && studentInfo && typeof studentInfo.passes === "number") {
-    totalPasses = studentInfo.passes;
-  }
-
-  const overallGpa = allGrades.length > 0
-    ? (allGrades.reduce((a, b) => a + b, 0) / allGrades.length).toFixed(2)
-    : (allModuleScores.length > 0
-        ? (allModuleScores.reduce((sum, m) => sum + m, 0) / allModuleScores.length).toFixed(2)
-        : (studentInfo?.reting ? String(studentInfo.reting) : "—"));
-
-  const totalGradeDistribution = {};
-  allGrades.forEach((g) => {
-    totalGradeDistribution[g] = (totalGradeDistribution[g] || 0) + 1;
-  });
+  const gpa = totalGrades > 0 ? (gradeSum / totalGrades).toFixed(2) : '—';
+  const isAdmitted = unadmittedCount === 0;
 
   return {
     activeCourse,
     activeSemester,
-    course: activeCourse,
-    semester: activeSemester,
-    disciplines: enrichedDisciplines,
-    passes: totalPasses,
-    missedLessons: allMissedLessons,
-    gpa: overallGpa,
-    rating: studentInfo?.reting ? String(studentInfo.reting) : overallGpa,
+    gpa,
+    isAdmitted,
     unadmittedCount,
-    isAdmitted: unadmittedCount === 0,
-    totalGradesCount: allGrades.length,
-    gradeDistribution: totalGradeDistribution
+    passes,
+    totalGradesCount: totalGrades,
+    gradeDistribution,
+    disciplines
   };
 }

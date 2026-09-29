@@ -173,7 +173,8 @@ export function getMondayOfWeek(date) {
  */
 export function isCollegeStudent(user) {
   if (!user) return false;
-  const subrole = String(user.subrole || '').toLowerCase();
+  const subrole = String(user.subrole || user.subRole || user.sub_role || '').toLowerCase();
+  const role = String(user.role || '').toLowerCase();
   const dept = String(user.department || '').toLowerCase();
   const fac = String(user.faculty || '').toLowerCase();
   const group = String(user.group || '').toLowerCase();
@@ -181,17 +182,82 @@ export function isCollegeStudent(user) {
 
   return (
     subrole.includes('college') ||
+    subrole.includes('колледж') ||
+    role.includes('college') ||
+    role.includes('колледж') ||
     dept.includes('колледж') ||
+    dept.includes('сп') ||
     fac.includes('колледж') ||
     group.startsWith('кп') ||
+    group.startsWith('сп') ||
+    group.includes('колледж') ||
     spec.includes('колледж')
   );
 }
 
 /**
+ * Robustly extract student course number from user profile, recordbook, or group name.
+ */
+export function getStudentCourse(user = null, recordbook = null) {
+  // 1. Direct explicit course property from API profile
+  const directCourse = Number(user?.course || user?.curse || 0);
+  if (directCourse >= 1 && directCourse <= 6) return directCourse;
+
+  // 2. Direct explicit semester property from API profile
+  const directSem = Number(user?.semester || 0);
+  if (directSem >= 1 && directSem <= 12) return Math.ceil(directSem / 2);
+
+  const group = String(user?.group || '').trim();
+
+  // 3. Trailing course number in group (e.g. 'КП24-ПСА-О-3' -> 3, 'ЮР-О-2' -> 2)
+  const endCourseMatch = group.match(/[-_\s](?:о|з|озо)?[-_\s]*([1-6])$/i);
+  if (endCourseMatch) {
+    const parsed = parseInt(endCourseMatch[1], 10);
+    if (parsed >= 1 && parsed <= 6) return parsed;
+  }
+
+  // 4. Recordbook deduction:
+  // If recordbook has completed semesters:
+  if (Array.isArray(recordbook) && recordbook.length > 0) {
+    const sems = recordbook.map(e => Number(e.semester) || 0).filter(s => s > 0);
+    const maxSem = sems.length > 0 ? Math.max(...sems) : 0;
+    if (maxSem > 0) {
+      const now = new Date();
+      const month = now.getMonth(); // 0-indexed: 8 is September
+      // If max semester is even (e.g. 2, 4, 6), and current date is in autumn/spring of next academic year, student has advanced!
+      if (maxSem % 2 === 0 && (month >= 7 || month <= 5)) {
+        const nextCourse = Math.ceil(maxSem / 2) + 1;
+        if (nextCourse <= 6) return nextCourse;
+      }
+      return Math.ceil(maxSem / 2);
+    }
+  }
+
+  // 5. Admission year in college groups (e.g. 'КП24-...' in Sep 2026 = 3rd course)
+  const yrMatch = group.match(/(?:кп|сп|юр|пс|пса)[-_ ]*(\d{2})/i);
+  if (yrMatch) {
+    const admissionYear = 2000 + parseInt(yrMatch[1], 10);
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const isNewYear = now.getMonth() >= 7; // Aug - Dec is first semester of new year
+    const calcCourse = currentYear - admissionYear + (isNewYear ? 1 : 0);
+    if (calcCourse >= 1 && calcCourse <= 6) return calcCourse;
+  }
+
+  // 6. Classical group patterns (e.g. 'КП-31' -> 3)
+  const groupMatch = group.match(/(?:^|\D)([1-6])\d{1,2}(?:$|\D)/);
+  if (groupMatch) {
+    const parsed = parseInt(groupMatch[1], 10);
+    if (parsed >= 1 && parsed <= 6) return parsed;
+  }
+
+  return 1;
+}
+
+/**
  * Accurately detects active semester for current calendar period.
  */
-export function detectActiveSemester(progressData = [], user = null, studentInfo = null) {
+export function detectActiveSemester(progressData = [], user = null, studentInfo = null, recordbook = null) {
   const now = new Date();
   const month = now.getMonth();
   const isAutumn = month >= 8 || month === 0;
@@ -199,18 +265,19 @@ export function detectActiveSemester(progressData = [], user = null, studentInfo
   let userCourse = Number(user?.course || studentInfo?.course || 0);
   let userSem = Number(user?.semester || studentInfo?.semester || 0);
 
+  if (!userCourse) {
+    userCourse = getStudentCourse(user, recordbook);
+  }
+
+  // If user profile explicitly provides both course and semester
   if (userSem > 0 && userCourse > 0) {
-    if (isAutumn && userSem % 2 === 0) {
-      userSem = userSem - 1;
-    } else if (!isAutumn && userSem % 2 !== 0) {
-      userSem = userSem + 1;
-    }
     return {
       course: userCourse,
       semester: userSem
     };
   }
 
+  // If progress has nested semester hierarchy (Bachelor)
   if (Array.isArray(progressData) && progressData.length > 0 && progressData[0].semester) {
     if (userSem > 0) {
       const match = progressData.find(s => Number(s.semester) === userSem);
@@ -252,43 +319,18 @@ export function detectActiveSemester(progressData = [], user = null, studentInfo
     };
   }
 
-  const finalCourse = userCourse || 1;
-  const finalSem = userSem || (isAutumn ? (finalCourse * 2 - 1) : (finalCourse * 2));
+  // Default calculation based on calendar period and detected course
+  const defaultSem = userSem > 0
+    ? userSem
+    : (isAutumn ? (userCourse * 2 - 1) : (userCourse * 2));
+
   return {
-    course: finalCourse,
-    semester: finalSem
+    course: userCourse || 1,
+    semester: defaultSem || 1
   };
 }
 
 /**
- * Filter raw /progress array to find the chosen semester's disciplines.
+ * Safely return array or empty array
  */
-export function filterSemesterProgress(data, targetCourse, targetSemester) {
-  if (!Array.isArray(data)) return [];
-  const cNum = Number(targetCourse);
-  const sNum = Number(targetSemester);
-
-  const matched = data.find(item => {
-    const itemCourse = Number(item.coures || item.course || 0);
-    const itemSemester = Number(item.semester || 0);
-    return itemSemester === sNum && (!itemCourse || itemCourse === cNum);
-  });
-
-  if (matched && Array.isArray(matched.disciplines)) {
-    return matched.disciplines;
-  }
-
-  if (data.length > 0 && (data[0].discipline || data[0].name) && !data[0].disciplines) {
-    const hasSem = data.some(d => d.semester !== undefined);
-    if (hasSem) {
-      return data.filter(d => {
-        const itemCourse = Number(d.course || 0);
-        const itemSemester = Number(d.semester || 0);
-        return (!itemCourse || itemCourse === cNum) && (!itemSemester || itemSemester === sNum);
-      });
-    }
-    return data;
-  }
-
-  return [];
-}
+export const safeArray = (val) => (Array.isArray(val) ? val : []);

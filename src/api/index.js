@@ -1,4 +1,4 @@
-export { apiClient } from './client.js';
+export { apiClient, isCircuitOpen, resetCircuit } from './client.js';
 export { authService } from './authService.js';
 export { cacheService } from './cacheService.js';
 export { cryptoStorage } from './cryptoStorage.js';
@@ -11,15 +11,17 @@ export { recordbookService } from './services/recordbookService.js';
 export { consultationsService } from './services/consultationsService.js';
 export { studentService } from './services/studentService.js';
 export { parseCollegeProgress } from './parsers/collegeParser.js';
-export { parseBachelorProgress } from './parsers/bachelorParser.js';
+export { parseBachelorProgress, filterSemesterProgress } from './parsers/bachelorParser.js';
+export { normalizeStudentStats } from './services/gradesService.js';
+export { rpudService } from './services/rpudService.js';
 export {
   lkService,
   formatISODate,
   formatDisplayDate,
   formatLessonTime,
   getMondayOfWeek,
+  getStudentCourse,
   detectActiveSemester,
-  filterSemesterProgress,
   isCollegeStudent,
   parseLessonDate,
   isPastDate

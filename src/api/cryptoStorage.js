@@ -74,6 +74,97 @@ function lsKeys() {
   return out;
 }
 
+/* ---------------- IndexedDB L2 backing store (hundreds of MBs quota) ---------------- */
+const IDB_NAME = "msal_crypto_db";
+const IDB_STORE = "secure_entries";
+let idbInstancePromise = null;
+
+function getIdb() {
+  if (typeof indexedDB === "undefined") return Promise.resolve(null);
+  if (!idbInstancePromise) {
+    idbInstancePromise = new Promise((resolve) => {
+      try {
+        const req = indexedDB.open(IDB_NAME, 1);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(IDB_STORE)) {
+            db.createObjectStore(IDB_STORE);
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => resolve(null);
+      } catch (_) {
+        resolve(null);
+      }
+    });
+  }
+  return idbInstancePromise;
+}
+
+async function idbGet(key) {
+  const db = await getIdb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, "readonly");
+      const req = tx.objectStore(IDB_STORE).get(key);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    } catch (_) {
+      resolve(null);
+    }
+  });
+}
+
+async function idbSet(key, val) {
+  const db = await getIdb();
+  if (!db) return false;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      tx.objectStore(IDB_STORE).put(val, key);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    } catch (_) {
+      resolve(false);
+    }
+  });
+}
+
+async function idbRemove(key) {
+  const db = await getIdb();
+  if (!db) return;
+  try {
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).delete(key);
+  } catch (_) {}
+}
+
+async function idbKeys() {
+  const db = await getIdb();
+  if (!db) return [];
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, "readonly");
+      const req = tx.objectStore(IDB_STORE).getAllKeys();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => resolve([]);
+    } catch (_) {
+      resolve([]);
+    }
+  });
+}
+
+async function idbClear() {
+  const db = await getIdb();
+  if (!db) return;
+  try {
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).clear();
+  } catch (_) {}
+}
+
+
 async function encryptValue(key, data) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const plain = new TextEncoder().encode(JSON.stringify(data));
@@ -197,10 +288,25 @@ async function migrateLegacy() {
 }
 
 async function doInit() {
-  if (typeof localStorage === 'undefined') return;
+  if (typeof localStorage === 'undefined' && typeof indexedDB === 'undefined') return;
   const key = await getDataKey();
 
   if (key) {
+    // 1. Load from IndexedDB (large caches, overflow store)
+    const iKeys = await idbKeys();
+    await Promise.all(iKeys.map(async (k) => {
+      if (memoryVault.has(k)) return;
+      try {
+        const raw = await idbGet(k);
+        if (raw && typeof raw === 'string' && raw.startsWith(PREFIX_V2)) {
+          memoryVault.set(k, await decryptValue(key, raw));
+        }
+      } catch (_) {
+        await idbRemove(k);
+      }
+    }));
+
+    // 2. Load from localStorage (fast sync store)
     const targets = lsKeys().filter((k) => isSensitiveKey(k) && (lsGet(k) || '').startsWith(PREFIX_V2));
     await Promise.all(targets.map(async (k) => {
       if (memoryVault.has(k)) return;
@@ -242,20 +348,39 @@ export const cryptoStorage = {
     if (value === null || value === undefined) {
       memoryVault.delete(key);
       lsRemove(key);
+      await idbRemove(key);
       return;
     }
     memoryVault.set(key, value);
-    if (typeof localStorage === 'undefined') return;
+    if (typeof localStorage === 'undefined' && typeof indexedDB === 'undefined') return;
 
     const dek = await getDataKey();
     if (!dek) {
       // Безопасного хранилища нет — не пишем на диск вообще
       lsRemove(key);
+      await idbRemove(key);
       return;
     }
     try {
       const encrypted = await encryptValue(dek, value);
-      if (writeSeq.get(key) === seq) lsSet(key, encrypted);
+      if (writeSeq.get(key) === seq) {
+        // Always persist to IndexedDB (asynchronous, hundreds of MBs quota)
+        await idbSet(key, encrypted);
+
+        // Also persist to localStorage for ultra-fast startup if space permits
+        const written = lsSet(key, encrypted);
+        if (!written && key.startsWith('msal_cache_')) {
+          // If localStorage is full, evict oldest msal_cache_* entries from localStorage
+          // (They remain safely stored in IndexedDB!)
+          try {
+            const cacheKeys = lsKeys().filter((k) => k.startsWith('msal_cache_'));
+            for (let i = 0; i < Math.min(5, cacheKeys.length); i++) {
+              lsRemove(cacheKeys[i]);
+            }
+            lsSet(key, encrypted);
+          } catch (_) {}
+        }
+      }
     } catch (e) {
       console.warn(`[CryptoStorage] Error writing ${key}:`, e?.message);
     }
@@ -296,6 +421,7 @@ export const cryptoStorage = {
     writeSeq.set(key, (writeSeq.get(key) || 0) + 1);
     memoryVault.delete(key);
     lsRemove(key);
+    idbRemove(key).catch(() => {});
   },
 
   /**
@@ -309,6 +435,7 @@ export const cryptoStorage = {
         lsRemove(k);
       }
     }
+    await idbClear();
     await destroyDataKey();
     initPromise = null;
   },

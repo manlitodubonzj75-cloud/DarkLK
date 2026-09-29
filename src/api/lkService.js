@@ -3,6 +3,7 @@ import { gradesService } from './services/gradesService';
 import { recordbookService } from './services/recordbookService';
 import { consultationsService } from './services/consultationsService';
 import { studentService } from './services/studentService';
+import { rpudService } from './services/rpudService';
 
 export * from './lkUtils';
 
@@ -11,6 +12,7 @@ export { gradesService } from './services/gradesService';
 export { recordbookService } from './services/recordbookService';
 export { consultationsService } from './services/consultationsService';
 export { studentService } from './services/studentService';
+export { rpudService } from './services/rpudService';
 
 /**
  * Unified Facade for backwards compatibility.
@@ -23,6 +25,13 @@ export const lkService = {
   getScheduleMonth: (...args) => scheduleService.getScheduleRange(...args),
   mergeScheduleWithConsultations: (...args) => scheduleService.mergeScheduleWithConsultations(...args),
   extractTodayLessons: (...args) => scheduleService.extractTodayLessons(...args),
+
+  // RPUD Themes & Programs
+  getRpudConfig: (...args) => rpudService.getConfig(...args),
+  saveRpudConfig: (...args) => rpudService.saveConfig(...args),
+  enrichScheduleWithThemes: (...args) => rpudService.enrichScheduleWithThemes(...args),
+  enrichDisciplinesWithThemes: (...args) => rpudService.enrichDisciplinesWithThemes(...args),
+  loadRpudData: (...args) => rpudService.loadRpudData(...args),
 
   // Grades & Performance
   getProgress: (...args) => gradesService.getProgress(...args),

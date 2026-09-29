@@ -7,6 +7,7 @@ import { Icons } from '../../components/common/Icons';
 import { LegalModal } from '../../components/common/LegalModal';
 import { updateService } from '../../api/updateService';
 import { getAppPlatform, APP_VERSION } from '../../api/updateService';
+import { rpudService } from '../../api/services/rpudService';
 
 function parsePrivacyBool(val) {
   if (typeof val === 'boolean') return val;
@@ -68,7 +69,7 @@ function buildPrivacyPayload(serverAccess, values) {
 }
 
 export const SettingsPage = () => {
-  const { user, logout } = useAuth();
+  const { user, isCollege, logout } = useAuth();
   const { isDark, toggleTheme } = useTheme();
   const navigate = useNavigate();
 
@@ -83,100 +84,160 @@ export const SettingsPage = () => {
   const [useSidebarNav, setUseSidebarNav] = useState(() => {
     try {
       return localStorage.getItem('msal_mobile_layout_mode') === 'sidebar';
-    } catch (_) {
+    } catch {
       return false;
     }
   });
 
+  // College RPUD settings state
+  const [rpudConfig, setRpudConfig] = useState(() => rpudService.getConfig());
+  const [rpudStats, setRpudStats] = useState(null);
+  const [rpudSyncing, setRpudSyncing] = useState(false);
+  const [syncProgress, setSyncProgress] = useState(null);
+  const [availableYears, setAvailableYears] = useState([]);
+  const [diskStatus, setDiskStatus] = useState(null);
+
   const platform = getAppPlatform();
   const platformLabel = platform === 'userscript' ? 'Userscript (Safari / Web)' : platform === 'ios' ? 'Apple iOS' : platform === 'android' ? 'Android' : platform === 'mac' ? 'macOS' : platform === 'win' ? 'Windows' : 'Web';
 
-  const handleToggleMobileLayout = () => {
-    const nextVal = !useSidebarNav;
-    setUseSidebarNav(nextVal);
+  // Load RPUD stats & discover academic years from Yandex Disk
+  useEffect(() => {
+    if (!isCollege) return;
+    const loadInfo = async () => {
+      try {
+        const data = await rpudService.loadRpudData();
+        if (data) {
+          const discCount = Object.keys(data).length;
+          let lessonCount = 0;
+          Object.values(data).forEach((d) => {
+            if (Array.isArray(d.lessons)) lessonCount += d.lessons.length;
+          });
+          setRpudStats({ discCount, lessonCount });
+        }
+      } catch (e) {
+        console.warn('Failed to load RPUD stats:', e);
+      }
+
+      try {
+        const years = await rpudService.fetchAcademicYears(rpudConfig.diskUrl || undefined);
+        if (Array.isArray(years) && years.length > 0) {
+          setAvailableYears(years);
+        }
+      } catch (e) {
+        console.warn('Failed to discover academic years:', e);
+      }
+    };
+    loadInfo();
+  }, [isCollege, rpudConfig.course, rpudConfig.level, rpudConfig.diskUrl]);
+
+  const handleUpdateRpud = (updates) => {
+    const next = { ...rpudConfig, ...updates };
+    setRpudConfig(next);
+    rpudService.saveConfig(next);
+    window.dispatchEvent(new CustomEvent('rpud-config-changed', { detail: next }));
+  };
+
+  const handleDynamicSync = async () => {
+    setRpudSyncing(true);
+    setDiskStatus(null);
+    setSyncProgress({ message: 'Подключение к Яндекс.Диску...' });
     try {
-      localStorage.setItem('msal_mobile_layout_mode', nextVal ? 'sidebar' : 'bottombar');
-      window.dispatchEvent(new CustomEvent('msal_mobile_layout_changed', { detail: nextVal ? 'sidebar' : 'bottombar' }));
-    } catch (_) {}
+      const res = await rpudService.syncFromYandexDisk({
+        force: true,
+        onProgress: (p) => setSyncProgress(p)
+      });
+      setDiskStatus({
+        success: true,
+        message: `Успешно: загружено ${res.disciplinesCount} дисциплин для ${res.academicYear}`
+      });
+      // Refresh stats
+      const data = await rpudService.loadRpudData();
+      if (data) {
+        const discCount = Object.keys(data).length;
+        let lessonCount = 0;
+        Object.values(data).forEach((d) => {
+          if (Array.isArray(d.lessons)) lessonCount += d.lessons.length;
+        });
+        setRpudStats({ discCount, lessonCount });
+      }
+    } catch (err) {
+      setDiskStatus({
+        success: false,
+        message: `Ошибка синхронизации: ${err.message}`
+      });
+    } finally {
+      setRpudSyncing(false);
+      setSyncProgress(null);
+    }
+  };
+
+  const handleToggleMobileLayout = () => {
+    const next = !useSidebarNav;
+    setUseSidebarNav(next);
+    try {
+      localStorage.setItem('msal_mobile_layout_mode', next ? 'sidebar' : 'bottom');
+      window.dispatchEvent(new CustomEvent('msal-layout-mode-changed', { detail: next ? 'sidebar' : 'bottom' }));
+    } catch (e) {
+      console.warn('Failed to save layout mode preference:', e);
+    }
+  };
+
+  const handleTogglePrivacy = async (key) => {
+    const nextVal = !privacy[key];
+    const newValues = { ...privacy, [key]: nextVal };
+    setPrivacy(newValues);
+    setSavingPrivacy(true);
+
+    try {
+      const payload = buildPrivacyPayload(serverAccessRef.current, newValues);
+      const res = await fetch('https://lk.msal.ru:3443/api/profile/privacy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const updated = await res.json().catch(() => null);
+        if (updated) serverAccessRef.current = updated;
+      }
+    } catch {
+      // Игнорируем ошибки сети при сохранении приватности
+    } finally {
+      setSavingPrivacy(false);
+    }
   };
 
   const handleCheckUpdates = async () => {
     setCheckingUpdate(true);
     setUpdateStatus(null);
     try {
-      const res = await updateService.checkForUpdates({ force: true });
-      if (res?.hasUpdate) {
+      const res = await updateService.checkForUpdates();
+      if (res && res.hasUpdate) {
         setUpdateStatus({
           hasUpdate: true,
-          text: `Доступна новая версия v${res.latestVersion}!`,
+          text: `Доступна версия v${res.latestVersion}!`,
           info: res
-        });
-      } else if (res?.error) {
-        setUpdateStatus({
-          hasUpdate: false,
-          text: `Ошибка проверки: ${res.error}`
         });
       } else {
         setUpdateStatus({
           hasUpdate: false,
-          text: 'У вас установлена самая актуальная версия приложения'
+          text: 'У вас установлена самая актуальная версия DarkMSAL.'
         });
       }
-    } catch (err) {
+    } catch {
       setUpdateStatus({
         hasUpdate: false,
-        text: 'Не удалось проверить обновления'
+        text: 'Не удалось проверить обновления. Попробуйте позже.'
       });
     } finally {
       setCheckingUpdate(false);
     }
   };
 
-  // Synchronize privacy settings from server /student/access or updated user profile
-  useEffect(() => {
-    let isMounted = true;
-    async function fetchServerPrivacy() {
-      try {
-        const { studentService } = await import('../../api');
-        const access = await studentService.getPrivacySettings();
-        if (isMounted && access && typeof access === 'object') {
-          serverAccessRef.current = access;
-          setPrivacy(resolveUserPrivacy({ accessSettings: access }));
-        }
-      } catch (err) {
-        // Fallback silently to user profile cached data
-      }
-    }
-    fetchServerPrivacy();
-    return () => { isMounted = false; };
-  }, []);
-
-  const handleTogglePrivacy = async (key) => {
-    const nextVal = !privacy[key];
-    const previousState = { ...privacy };
-    setPrivacy(prev => ({ ...prev, [key]: nextVal }));
-    setSavingPrivacy(true);
-
-    try {
-      const { studentService } = await import('../../api');
-      const payload = buildPrivacyPayload(serverAccessRef.current, { ...privacy, [key]: nextVal });
-      await studentService.updatePrivacySettings(payload);
-      serverAccessRef.current = payload;
-    } catch (err) {
-      console.error('[SettingsPage] Failed to save privacy settings:', err);
-      setPrivacy(previousState);
-      alert('Не удалось сохранить настройку на сервере. Проверьте подключение к сети.');
-    } finally {
-      setSavingPrivacy(false);
-    }
-  };
-
-  const getInitials = (name = '') => {
-    if (!name || typeof name !== 'string') return '??';
+  const getInitials = (name) => {
+    if (!name) return 'МГ';
     const parts = name.trim().split(/\s+/);
-    if (parts.length >= 2 && parts[0] && parts[1]) {
-      return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-    }
+    if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
     return name.slice(0, 2).toUpperCase();
   };
 
@@ -315,6 +376,143 @@ export const SettingsPage = () => {
           </div>
         </Card>
       </div>
+
+      {/* College RPUD Section */}
+      {isCollege && (
+        <div>
+          <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted mb-3 px-1">
+            Рабочие программы дисциплин (РПУД)
+          </h3>
+          <Card className="p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 rounded-xl bg-bg text-dark">
+                  <Icons.BookOpen size={20} />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-dark">Темы занятий из РПУД</h4>
+                  <p className="text-xs text-textMuted">Сопоставление расписания с учебным планом колледжа</p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => handleUpdateRpud({ enabled: !rpudConfig.enabled })}
+                role="switch"
+                aria-checked={Boolean(rpudConfig.enabled)}
+                aria-label="Включить сопоставление с РПУД"
+                className={`w-12 h-7 rounded-full p-1 transition-colors duration-150 ease-in-out shrink-0 ml-3 ${
+                  rpudConfig.enabled ? 'bg-secondary' : 'bg-gray-300 dark:bg-gray-700'
+                }`}
+              >
+                <div
+                  className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform duration-150 ease-in-out ${
+                    rpudConfig.enabled ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {rpudConfig.enabled && (
+              <div className="space-y-3 pt-2 border-t border-border">
+                {/* Academic Year Selection */}
+                <div>
+                  <label className="text-xs font-bold text-dark block mb-1">Учебный год на Яндекс.Диске</label>
+                  <select
+                    value={rpudConfig.academicYear || ''}
+                    onChange={(e) => handleUpdateRpud({ academicYear: e.target.value })}
+                    className="w-full p-2.5 rounded-xl bg-bg border border-border text-xs font-semibold text-dark outline-none focus:border-accent"
+                  >
+                    {availableYears.map((yr) => (
+                      <option key={yr} value={yr}>{yr}</option>
+                    ))}
+                    {!availableYears.length && (
+                      <option value={rpudConfig.academicYear}>{rpudConfig.academicYear || '2026-2027 учебный год'}</option>
+                    )}
+                  </select>
+                </div>
+
+                {/* Level / Education Base */}
+                <div>
+                  <label className="text-xs font-bold text-dark block mb-1">База образования</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateRpud({ level: 'ooo' })}
+                      className={`p-2.5 rounded-xl border text-xs font-bold transition-all ${
+                        rpudConfig.level === 'ooo'
+                          ? 'bg-secondary/15 border-secondary text-secondary'
+                          : 'bg-bg border-border text-textMuted hover:text-dark'
+                      }`}
+                    >
+                      ООО (9 классов)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateRpud({ level: 'soo' })}
+                      className={`p-2.5 rounded-xl border text-xs font-bold transition-all ${
+                        rpudConfig.level === 'soo'
+                          ? 'bg-secondary/15 border-secondary text-secondary'
+                          : 'bg-bg border-border text-textMuted hover:text-dark'
+                      }`}
+                    >
+                      СОО (11 классов)
+                    </button>
+                  </div>
+                </div>
+
+                {/* Course Selection */}
+                <div>
+                  <label className="text-xs font-bold text-dark block mb-1">Курс</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[1, 2, 3].map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => handleUpdateRpud({ course: c })}
+                        className={`p-2 rounded-xl border text-xs font-bold transition-all ${
+                          Number(rpudConfig.course) === c
+                            ? 'bg-secondary/15 border-secondary text-secondary'
+                            : 'bg-bg border-border text-textMuted hover:text-dark'
+                        }`}
+                      >
+                        {c} курс
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Yandex Disk Dynamic Sync Button & Status */}
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={handleDynamicSync}
+                    disabled={rpudSyncing}
+                    className="w-full py-2.5 px-4 rounded-xl bg-primary text-white font-bold text-xs hover:bg-primary/90 transition-all flex items-center justify-center space-x-2 shadow-sm disabled:opacity-50"
+                  >
+                    <Icons.Refresh size={14} className={rpudSyncing ? 'animate-spin' : ''} />
+                    <span>{rpudSyncing ? 'Синхронизация с Яндекс.Диска...' : 'Синхронизировать с Яндекс.Диска'}</span>
+                  </button>
+                  {syncProgress && (
+                    <p className="text-[11px] text-textMuted text-center mt-1.5 animate-pulse">
+                      {syncProgress.message}
+                    </p>
+                  )}
+                  {diskStatus && (
+                    <p className={`text-[11px] mt-1.5 font-medium ${diskStatus.success ? 'text-emerald-600' : 'text-rose-500'}`}>
+                      {diskStatus.message}
+                    </p>
+                  )}
+                  {rpudStats && (
+                    <p className="text-[11px] text-textMuted text-center mt-1">
+                      В кэше: {rpudStats.discCount} дисциплин, {rpudStats.lessonCount} тем занятий
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
 
       {/* Privacy Settings Section */}
       <div>

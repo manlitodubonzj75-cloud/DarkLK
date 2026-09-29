@@ -26,6 +26,9 @@ if (typeof localStorage !== 'undefined') {
   } catch (_) {}
 }
 
+// In-flight request deduplication map
+const inFlightRequests = new Map();
+
 function readPayload(key) {
   const payload = cryptoStorage.getItemSync(`${CACHE_PREFIX}${key}`);
   return payload && typeof payload === 'object' && 'data' in payload ? payload : null;
@@ -121,25 +124,60 @@ export const cacheService = {
       return cached;
     }
 
+    // In-flight request deduplication:
+    // If caller requests forceRefresh, drop any existing slow/unforced promise from the map
+    if (options.forceRefresh) {
+      inFlightRequests.delete(key);
+    } else if (inFlightRequests.has(key)) {
+      return inFlightRequests.get(key);
+    }
+
+    const requestStartTime = Date.now();
+
+    const fetchPromise = (async () => {
+      try {
+        // Attempt fresh fetch from server
+        const freshData = await fetcherFn();
+
+        // Whenever fresh data is received from server, check sequencing and empty array guard
+        if (freshData !== null && freshData !== undefined) {
+          // Guard against out-of-order write (race conditions):
+          // If a newer write already occurred while this network request was in-flight, do not overwrite it!
+          const latestInfo = this.getInfo(key);
+          const isStaleSequence = latestInfo && latestInfo.timestamp > requestStartTime;
+
+          // Guard against network glitch returning [] and wiping valid populated cache without explicit forceRefresh
+          const isAccidentalWipe = !options.forceRefresh &&
+            Array.isArray(cached) && cached.length > 0 &&
+            Array.isArray(freshData) && freshData.length === 0;
+
+          if (!isStaleSequence && !isAccidentalWipe) {
+            this.set(key, freshData);
+          }
+
+          return isAccidentalWipe ? cached : freshData;
+        }
+
+        return cached !== null ? cached : freshData;
+      } catch (error) {
+        console.warn(`[Cache] Network fetch failed for "${key}". Falling back to offline cache:`, error.message);
+
+        if (cached !== null) {
+          return cached;
+        }
+
+        throw error;
+      }
+    })();
+
+    inFlightRequests.set(key, fetchPromise);
     try {
-      // Attempt fresh fetch from server
-      const freshData = await fetcherFn();
-
-      // Whenever fresh data is received from server, immediately replace cache
-      if (freshData !== null && freshData !== undefined) {
-        this.set(key, freshData);
-        return freshData;
+      return await fetchPromise;
+    } finally {
+      // Only remove if this promise is still the active one registered for the key
+      if (inFlightRequests.get(key) === fetchPromise) {
+        inFlightRequests.delete(key);
       }
-
-      return cached !== null ? cached : freshData;
-    } catch (error) {
-      console.warn(`[Cache] Network fetch failed for "${key}". Falling back to offline cache:`, error.message);
-
-      if (cached !== null) {
-        return cached;
-      }
-
-      throw error;
     }
   }
 };

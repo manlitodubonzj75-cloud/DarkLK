@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, dialog, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, safeStorage, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { initUpdater } = require('./updater.cjs');
@@ -143,7 +143,8 @@ ipcMain.handle('vault-key', async (event, op, value) => {
 /* ------------------------------------------------------------------ */
 
 async function doRequest({ url, method = 'GET', headers = {}, body = null, redirect = 'manual', timeout = 30000 }) {
-  const res = await globalThis.fetch(url, {
+  const fetchFn = (net && typeof net.fetch === 'function') ? net.fetch : globalThis.fetch;
+  const res = await fetchFn(url, {
     method,
     headers,
     body,
@@ -208,7 +209,8 @@ ipcMain.handle('mail-download', async (event, { url, fileName, headers = {}, bas
       buffer = Buffer.from(base64Data, 'base64');
     } else {
       assertOrigin(url, MAIL_ORIGINS);
-      const res = await globalThis.fetch(url, {
+      const fetchFn = (net && typeof net.fetch === 'function') ? net.fetch : globalThis.fetch;
+  const res = await fetchFn(url, {
         method: 'GET',
         headers,
         redirect: 'manual',

@@ -6,22 +6,21 @@
  * - 5-point grading system (ratings: 2..5)
  * - Turnout tracking: individual missed lessons (turnout: false, past date, no grade)
  * - Academic debt tracking via flawGrape / flawPractice / debtReport
- * - Zero consultations (consultations belong exclusively to Bachelor)
- * - Concurrency-limited details fetching (max 3 in parallel) with per-discipline caching
+ * - Non-blocking initial render: returns disciplines overview instantly, loads journal on-demand or in background
  */
 
-import { runWithConcurrency } from '../utils/concurrency.js';
+import { runWithConcurrency } from "../utils/concurrency.js";
 
 function parseGrade(val) {
-  if (val === null || val === undefined || val === '') return 0;
+  if (val === null || val === undefined || val === "") return 0;
   const num = parseInt(val, 10);
   if (!isNaN(num) && num >= 2 && num <= 5) return num;
   return 0;
 }
 
-function parseLessonDate(dateStr) {
+export function parseLessonDate(dateStr) {
   if (!dateStr) return null;
-  const parts = String(dateStr).trim().split('.');
+  const parts = String(dateStr).trim().split(".");
   if (parts.length === 3) {
     const d = parseInt(parts[0], 10);
     const m = parseInt(parts[1], 10) - 1;
@@ -31,13 +30,12 @@ function parseLessonDate(dateStr) {
     }
   }
   const str = String(dateStr).trim();
-  // 'YYYY-MM-DD' без времени — локальная дата, а не UTC-полночь
   const iso = /^\d{4}-\d{2}-\d{2}$/.test(str) ? new Date(`${str}T00:00:00`) : new Date(str);
   if (!isNaN(iso.getTime())) return iso;
   return null;
 }
 
-function isPastDate(d) {
+export function isPastDate(d) {
   if (!d) return false;
   const now = new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -50,48 +48,27 @@ function isPastDate(d) {
 
 /**
  * Parses and enriches College progress data.
- *
- * @param {Array} rawProgress Array of college discipline items from /progress
- * @param {number} activeCourse Current detected course
- * @param {number} activeSemester Current detected semester
- * @param {Object} context Context containing { apiClient, cacheService }
- * @returns {Promise<Object>} Unified progress object formatted for College UI
+ * Does NOT block on fetching detailed lesson journals for all 14 disciplines upfront.
+ * Loads any existing cached journals synchronously, and leaves on-demand or background loading for details.
  */
-export async function parseCollegeProgress(rawProgress, activeCourse, activeSemester, { apiClient, cacheService }) {
-  const collegeDisciplines = Array.isArray(rawProgress) ? rawProgress : [];
+export async function parseCollegeProgress(rawProgress, activeCourse, activeSemester, { apiClient, cacheService, options = {} } = {}) {
+  let collegeDisciplines = [];
+  if (Array.isArray(rawProgress)) {
+    collegeDisciplines = rawProgress;
+  } else if (rawProgress && Array.isArray(rawProgress.disciplines)) {
+    collegeDisciplines = rawProgress.disciplines;
+  }
 
-  // Create tasks for fetching details with concurrency control (max 3 concurrent)
-  const taskFns = collegeDisciplines.map((d) => async () => {
-    const guid = d.disciplineID || d.id;
-    if (!guid) return null;
-
-    const discCacheKey = `college_details_${guid}_c${activeCourse}_s${activeSemester}`;
-    const cachedLessons = cacheService.get(discCacheKey);
-
-    try {
-      const res = await apiClient(
-        `/progress/details?disciplineID=${guid}&course=${activeCourse}&semester=${activeSemester}`
-      ).catch((err) => {
-        console.warn(`[College Details] Failed for ${d.discipline || guid}:`, err.message);
-        return cachedLessons || [];
-      });
-
-      const lessons = Array.isArray(res) ? res : (Array.isArray(cachedLessons) ? cachedLessons : []);
-      if (Array.isArray(res) && res.length > 0) {
-        cacheService.set(discCacheKey, res);
-      }
-
-      return { disciplineID: guid, lessons };
-    } catch (_) {
-      return { disciplineID: guid, lessons: Array.isArray(cachedLessons) ? cachedLessons : [] };
-    }
-  });
-
-  const settledDetails = await runWithConcurrency(taskFns, 3);
+  // Pre-load any cached lessons synchronously
   const detailsMap = new Map();
-  settledDetails.forEach((s) => {
-    if (s.status === 'fulfilled' && s.value && s.value.disciplineID) {
-      detailsMap.set(s.value.disciplineID, s.value.lessons);
+  collegeDisciplines.forEach((d) => {
+    const guid = d.disciplineID || d.id || d.guid;
+    if (guid && cacheService?.get) {
+      const discCacheKey = `college_details_${guid}_c${activeCourse}_s${activeSemester}`;
+      const cached = cacheService.get(discCacheKey);
+      if (Array.isArray(cached) && cached.length > 0) {
+        detailsMap.set(guid, cached);
+      }
     }
   });
 
@@ -99,10 +76,11 @@ export async function parseCollegeProgress(rawProgress, activeCourse, activeSeme
   let allGrades = [];
   let allMissedLessons = [];
   let unadmittedCount = 0;
+  let totalReportedGrades = 0;
 
   const enrichedDisciplines = collegeDisciplines.map((d, idx) => {
-    const discName = (d.discipline || d.name || '').trim();
-    const discId = d.disciplineID || d.id || idx;
+    const discName = (d.discipline || d.name || "").trim();
+    const discId = d.disciplineID || d.id || d.guid || idx;
     const lessons = detailsMap.get(discId) || [];
 
     let passes = 0;
@@ -127,24 +105,27 @@ export async function parseCollegeProgress(rawProgress, activeCourse, activeSeme
       // Missed classes check
       const lessonDate = parseLessonDate(l.date);
       const hasGrade = ratingsList.some((r) => parseGrade(r) > 0);
-      if (lessonDate && isPastDate(lessonDate) && !l.turnout && !hasGrade) {
+      const isTurnoutFalse = l.turnout === false || l.turnout === 0 || l.turnout === "false" || l.missed === 1 || l.missed === "1" || l.missed === true;
+      const isAbsent = isTurnoutFalse && !l.lateness && !hasGrade;
+
+      if (lessonDate && isPastDate(lessonDate) && isAbsent) {
         passes++;
         totalPasses++;
         allMissedLessons.push({
           discipline: discName,
           date: l.date,
-          teacher: l.teacher || d.teacher || '',
+          teacher: l.teacher || d.teacher || "",
           subgroup: l.subgroup || 0
         });
       }
     });
 
     // Admission status
-    const access = d.access === true || d.access === 1 || String(d.access).toLowerCase() === 'true';
+    const access = d.access === true || d.access === 1 || String(d.access).toLowerCase() === "true";
     if (!access) unadmittedCount++;
 
     // Clean info / debtReport
-    const info = (d.debtReport || d.info || '').toString().replace(/[\r\n]+/g, ' ').replace(/#/g, ' • ').trim();
+    const info = (d.debtReport || d.info || "").toString().replace(/[\r\n]+/g, " ").replace(/#/g, " • ").trim();
 
     // Average grade for discipline
     const avgGrade = discGrades.length > 0
@@ -152,12 +133,14 @@ export async function parseCollegeProgress(rawProgress, activeCourse, activeSeme
       : null;
 
     const professors = teachersSet.size > 0 ? Array.from(teachersSet) : (d.teacher ? [d.teacher] : []);
+    const countGrape = Number(d.countGrape) || discGrades.length;
+    totalReportedGrades += countGrape;
 
     return {
       id: discId,
       disciplineID: discId,
       name: discName,
-      type: 'Дисциплина',
+      type: "Дисциплина",
       professors,
       access,
       info,
@@ -168,43 +151,109 @@ export async function parseCollegeProgress(rawProgress, activeCourse, activeSeme
       moduleScores: [],
       modules: [],
       lessons,
-      countGrape: Number(d.countGrape) || 0,
       countPractice: Number(d.countPractice) || 0,
+      countGrape,
       flawGrape: Number(d.flawGrape) || 0,
-      flawPractice: Number(d.flawPractice) || 0
+      flawPractice: Number(d.flawPractice) || 0,
+      debtReport: d.debtReport || null
     };
   });
 
-  // Overall GPA (5-point system)
-  const overallGpa = allGrades.length > 0
-    ? (allGrades.reduce((a, b) => a + b, 0) / allGrades.length).toFixed(2)
-    : '—';
-
-  const totalGradeDistribution = {};
+  const gradeDistribution = { 5: 0, 4: 0, 3: 0, 2: 0 };
   allGrades.forEach((g) => {
-    totalGradeDistribution[g] = (totalGradeDistribution[g] || 0) + 1;
+    if (gradeDistribution[g] !== undefined) gradeDistribution[g]++;
   });
 
-  // Sort missed lessons newest date first
-  allMissedLessons.sort((a, b) => {
-    const da = parseLessonDate(a.date);
-    const db = parseLessonDate(b.date);
-    if (da && db) return db - da;
-    return 0;
-  });
+  const totalGradesCount = allGrades.length > 0 ? allGrades.length : totalReportedGrades;
+  const gpa = allGrades.length > 0
+    ? (allGrades.reduce((a, b) => a + b, 0) / allGrades.length).toFixed(2)
+    : null;
+
+  // Background non-blocking pre-fetch for missing or stale details (TTL: 15 min or forceRefresh)
+  const forceRefresh = Boolean(options.forceRefresh);
+  const DETAILS_TTL_MS = 15 * 60 * 1000;
+
+  if (apiClient && cacheService && typeof window !== "undefined") {
+    setTimeout(async () => {
+      try {
+        const toFetch = collegeDisciplines.filter((d) => {
+          const guid = d.disciplineID || d.id || d.guid;
+          if (!guid) return false;
+          if (forceRefresh) return true;
+          const discCacheKey = `college_details_${guid}_c${activeCourse}_s${activeSemester}`;
+          const cached = cacheService.get(discCacheKey);
+          if (!Array.isArray(cached) || cached.length === 0) return true;
+          const info = cacheService.getInfo(discCacheKey);
+          return !info || info.ageMs > DETAILS_TTL_MS;
+        });
+
+        if (toFetch.length === 0) return;
+
+        const tasks = toFetch.map((d) => async () => {
+          const guid = d.disciplineID || d.id || d.guid;
+          try {
+            const res = await apiClient(
+              `/progress/details?disciplineID=${guid}&course=${activeCourse}&semester=${activeSemester}`,
+              { timeout: 15000, forceRefresh }
+            );
+            if (Array.isArray(res) && res.length > 0) {
+              const discCacheKey = `college_details_${guid}_c${activeCourse}_s${activeSemester}`;
+              cacheService.set(discCacheKey, res);
+
+              // Update master cache so all components immediately see the enriched lessons
+              const mainKey = `progress_with_lessons_c${activeCourse}_s${activeSemester}`;
+              const master = cacheService.get(mainKey) || cacheService.get("progress_with_lessons_latest");
+              if (master && Array.isArray(master.disciplines)) {
+                const discGrades = [];
+                res.forEach((l) => {
+                  const ratings = Array.isArray(l.ratings) ? l.ratings : (l.ratings !== undefined ? [l.ratings] : []);
+                  ratings.forEach((r) => {
+                    const num = parseInt(r, 10);
+                    if (!isNaN(num) && num >= 2 && num <= 5) discGrades.push(num);
+                  });
+                });
+                const avgGrade = discGrades.length > 0 ? (discGrades.reduce((a, b) => a + b, 0) / discGrades.length).toFixed(2) : null;
+                const updatedDisc = master.disciplines.map((dItem) => {
+                  if ((dItem.disciplineID || dItem.id || dItem.guid) === guid) {
+                    return {
+                      ...dItem,
+                      lessons: res,
+                      grades: discGrades.length > 0 ? discGrades : dItem.grades,
+                      avgGrade: avgGrade || dItem.avgGrade,
+                      countGrape: discGrades.length > 0 ? discGrades.length : dItem.countGrape
+                    };
+                  }
+                  return dItem;
+                });
+                const updatedMaster = { ...master, disciplines: updatedDisc };
+                cacheService.set(mainKey, updatedMaster);
+                cacheService.set("progress_with_lessons_latest", updatedMaster);
+              }
+
+              window.dispatchEvent(new CustomEvent("msal-college-discipline-loaded", {
+                detail: { disciplineID: guid, lessons: res }
+              }));
+            }
+          } catch (_) {}
+        });
+
+        // Run with concurrency 2 in the background quietly
+        await runWithConcurrency(tasks, 2);
+      } catch (_) {}
+    }, 200);
+  }
 
   return {
+    isCollege: true,
     activeCourse,
     activeSemester,
-    disciplines: enrichedDisciplines,
-    gpa: overallGpa,
+    gpa,
+    isAdmitted: unadmittedCount === 0,
+    unadmittedCount,
     passes: totalPasses,
     missedLessons: allMissedLessons,
-    totalGradesCount: allGrades.length,
-    gradeDistribution: totalGradeDistribution,
-    unadmittedCount,
-    isAdmitted: unadmittedCount === 0,
-    isCollege: true,
-    studentInfo: {}
+    disciplines: enrichedDisciplines,
+    totalGradesCount,
+    gradeDistribution
   };
 }

@@ -31,40 +31,31 @@ const BASE_URL = isNativeEnv
   ? 'https://lk.msal.ru:3443'
   : (import.meta.env?.VITE_API_BASE_URL || '/api');
 
-// Platform metadata headers
+// Platform metadata headers: clean browser-standard headers without bot/fingerprint signatures
 function getPlatformDeviceHeaders() {
-  if (typeof window === 'undefined') return {};
-
-  const isAndroid = isCapacitorNative ? (Capacitor.getPlatform() === 'android') : /Android/i.test(navigator.userAgent);
-  const isIOS = isCapacitorNative ? (Capacitor.getPlatform() === 'ios') : /iPhone|iPad|iPod/i.test(navigator.userAgent);
-
-  let clientName = 'Chrome';
-  if (/Firefox/i.test(navigator.userAgent)) clientName = 'Firefox';
-  else if (/Safari/i.test(navigator.userAgent) && !/Chrome/i.test(navigator.userAgent)) clientName = 'Safari';
-
-  let os = 'Desktop';
-  let deviceType = 'desktop';
-
-  if (isAndroid) {
-    os = 'Android';
-    deviceType = 'mobile';
-  } else if (isIOS) {
-    os = 'iOS';
-    deviceType = 'mobile';
-  } else if (navigator.platform?.includes('Mac')) {
-    os = 'macOS';
-  } else if (navigator.platform?.includes('Win')) {
-    os = 'Windows';
-  } else if (navigator.platform?.includes('Linux')) {
-    os = 'Linux';
-  }
-
-  const deviceHeader = `ClientType: ${isCapacitorNative ? 'app' : 'browser'}, ClientName: ${clientName}, ClientVersion: 135.0, DeviceOS: ${os}, DeviceType: ${deviceType}`;
-
   return {
-    'X-Device-Model': deviceHeader,
     'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7'
   };
+}
+
+// Lightweight Circuit Breaker to prevent UI hangs during university server outages
+let consecutiveFailures = 0;
+let circuitOpenUntil = 0;
+const FAILURE_THRESHOLD = 3;
+const CIRCUIT_COOLDOWN_MS = 30000;
+
+export function isCircuitOpen() {
+  return Date.now() < circuitOpenUntil;
+}
+
+export function resetCircuit() {
+  consecutiveFailures = 0;
+  circuitOpenUntil = 0;
+}
+
+function isAuthEndpoint(endpoint) {
+  const ep = String(endpoint || "").toLowerCase();
+  return ep.includes("/auth") || ep.includes("/token") || ep.includes("/login") || ep.includes("/refresh");
 }
 
 function getStandardHeaders(explicitToken = null) {
@@ -321,6 +312,16 @@ export async function apiClient(endpoint, options = {}) {
   const url = `${BASE_URL}${cleanEndpoint}`;
   const timeoutMs = options.timeout || 15000;
 
+  // Circuit Breaker fast-path: if backend is down with 3+ consecutive timeouts/5xx,
+  // fail immediately (0ms) so cacheService serves cached offline data without hanging UI.
+  // CRITICAL: Auth, token and login endpoints MUST NEVER be blocked by the circuit breaker!
+  if (isCircuitOpen() && !options.forceRefresh && !isAuthEndpoint(endpoint)) {
+    const circuitError = new Error('CIRCUIT_OPEN: Сервер МГЮА временно недоступен');
+    circuitError.status = 503;
+    circuitError.name = 'CircuitBreakerError';
+    throw circuitError;
+  }
+
   const headers = {
     ...getStandardHeaders(options.token),
     ...(options.headers || {})
@@ -336,13 +337,15 @@ export async function apiClient(endpoint, options = {}) {
 
     // 401 Unauthorized - token expired or invalid
     if (response.status === 401) {
-      if (!endpoint.includes('/auth')) {
+      if (!isAuthEndpoint(endpoint)) {
         const refreshed = await tryRefreshToken();
         if (refreshed) {
           const newToken = cryptoStorage.getToken();
           headers['Authorization'] = `Bearer ${newToken}`;
           const retryResponse = await fetchWithTimeout(url, { ...config, headers }, timeoutMs);
           if (retryResponse.ok) {
+            consecutiveFailures = 0;
+            circuitOpenUntil = 0;
             if (retryResponse.status === 204) return null;
             return await retryResponse.json();
           }
@@ -354,27 +357,87 @@ export async function apiClient(endpoint, options = {}) {
     }
 
     if (response.status === 204) {
+      consecutiveFailures = 0;
+      circuitOpenUntil = 0;
       return null;
+    }
+
+    // Read response text to handle HTML 200 OK login forms / expired sessions (IIS / 1C behavior)
+    const contentType = (response.headers?.get ? response.headers.get('content-type') : response.headers?.['content-type']) || '';
+    const rawText = await response.text();
+
+    // Check for HTML response (expired session / IIS login redirect masquerading as 200 OK)
+    const isHtmlResponse = contentType.includes('text/html') ||
+      rawText.trim().startsWith('<!DOCTYPE') ||
+      rawText.trim().startsWith('<html') ||
+      (rawText.includes('<form action=') && rawText.includes('password')) ||
+      rawText.includes('<title>Авторизация</title>');
+
+    if (isHtmlResponse && response.ok) {
+      if (!isAuthEndpoint(endpoint)) {
+        console.warn(`[Client] Received HTML 200 OK instead of JSON on ${endpoint}. Attempting silent token refresh...`);
+        const refreshed = await tryRefreshToken();
+        if (refreshed) {
+          const newToken = cryptoStorage.getToken();
+          headers['Authorization'] = `Bearer ${newToken}`;
+          const retryResponse = await fetchWithTimeout(url, { ...config, headers }, timeoutMs);
+          if (retryResponse.ok) {
+            const retryText = await retryResponse.text();
+            if (!retryText.trim().startsWith('<!DOCTYPE') && !retryText.trim().startsWith('<html')) {
+              consecutiveFailures = 0;
+              circuitOpenUntil = 0;
+              try {
+                return JSON.parse(retryText);
+              } catch (_) {}
+            }
+          }
+        }
+      }
+      const authError = new Error('SESSION_EXPIRED_HTML: Сессия истекла (получена страница авторизации вместо JSON)');
+      authError.status = 401;
+      throw authError;
     }
 
     if (!response.ok) {
       let errorDetail = `HTTP ${response.status}`;
       try {
-        const errorData = await response.json();
+        const errorData = JSON.parse(rawText);
         errorDetail = errorData.message || errorData.detail || errorData.error || errorDetail;
       } catch (_) {
-        const text = await response.text();
-        if (text) errorDetail = text;
+        if (rawText) errorDetail = rawText.slice(0, 300);
       }
+
+      if (!isAuthEndpoint(endpoint) && response.status >= 500) {
+        consecutiveFailures++;
+        if (consecutiveFailures >= FAILURE_THRESHOLD) {
+          circuitOpenUntil = Date.now() + CIRCUIT_COOLDOWN_MS;
+          console.warn(`[Circuit Breaker] Trip activated: backend down (${response.status}), skipping network for ${CIRCUIT_COOLDOWN_MS / 1000}s`);
+        }
+      }
+
       const err = new Error(errorDetail);
       err.status = response.status;
       throw err;
     }
 
-    return await response.json();
+    // Success - reset breaker
+    consecutiveFailures = 0;
+    circuitOpenUntil = 0;
+
+    try {
+      return JSON.parse(rawText);
+    } catch (parseErr) {
+      console.warn(`[Client] Failed to parse JSON on ${endpoint}:`, parseErr.message);
+      throw parseErr;
+    }
   } catch (err) {
-    if (err.name === 'TimeoutError' || err.status === 408) {
-      console.warn(`[Client] Network timeout on ${endpoint}`);
+    if (!isAuthEndpoint(endpoint) && (err.name === 'TimeoutError' || err.status === 408 || err.message?.includes('Network') || err.status === 0)) {
+      consecutiveFailures++;
+      if (consecutiveFailures >= FAILURE_THRESHOLD) {
+        circuitOpenUntil = Date.now() + CIRCUIT_COOLDOWN_MS;
+        console.warn(`[Circuit Breaker] Trip activated: repeated network failures, skipping network for ${CIRCUIT_COOLDOWN_MS / 1000}s`);
+      }
+      console.warn(`[Client] Network timeout/error on ${endpoint}`);
     }
     throw err;
   }

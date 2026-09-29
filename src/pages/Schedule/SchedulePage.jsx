@@ -69,7 +69,16 @@ export const SchedulePage = () => {
       const data = await lkService.getScheduleWeek(monday, { forceRefresh: !!options.forceRefresh });
       if (requestId !== requestIdRef.current) return;
       if (Array.isArray(data)) {
-        setScheduleData(data);
+        if (isCollege) {
+          try {
+            const enriched = await lkService.enrichScheduleWithThemes(data);
+            if (requestId === requestIdRef.current) setScheduleData(enriched);
+          } catch {
+            if (requestId === requestIdRef.current) setScheduleData(data);
+          }
+        } else {
+          setScheduleData(data);
+        }
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent("app-schedule-updated"));
         }
@@ -82,7 +91,7 @@ export const SchedulePage = () => {
     } finally {
       if (requestId === requestIdRef.current) setIsLoading(false);
     }
-  }, []);
+  }, [isCollege]);
 
   // Fetch Month Schedule (using getScheduleRange from 1st of month to last of month)
   const fetchMonthSchedule = useCallback(async (monthDate, options = {}) => {
@@ -108,7 +117,16 @@ export const SchedulePage = () => {
       const data = await lkService.getScheduleRange(from, to, { forceRefresh: !!options.forceRefresh });
       if (requestId !== requestIdRef.current) return;
       if (Array.isArray(data)) {
-        setScheduleData(data);
+        if (isCollege) {
+          try {
+            const enriched = await lkService.enrichScheduleWithThemes(data);
+            if (requestId === requestIdRef.current) setScheduleData(enriched);
+          } catch {
+            if (requestId === requestIdRef.current) setScheduleData(data);
+          }
+        } else {
+          setScheduleData(data);
+        }
       }
     } catch (err) {
       if (requestId !== requestIdRef.current) return;
@@ -118,7 +136,7 @@ export const SchedulePage = () => {
     } finally {
       if (requestId === requestIdRef.current) setIsLoading(false);
     }
-  }, []);
+  }, [isCollege]);
 
   // Trigger fetch depending on viewMode
   useEffect(() => {
@@ -128,6 +146,20 @@ export const SchedulePage = () => {
       fetchMonthSchedule(currentMonthDate);
     }
   }, [viewMode, currentMonday, currentMonthDate, fetchWeekSchedule, fetchMonthSchedule]);
+
+  // Re-fetch / re-enrich when RPUD configuration changes
+  useEffect(() => {
+    if (!isCollege) return;
+    const handleRpudChanged = () => {
+      if (viewMode === 'month') {
+        fetchMonthSchedule(currentMonthDate);
+      } else {
+        fetchWeekSchedule(currentMonday);
+      }
+    };
+    window.addEventListener('rpud-config-changed', handleRpudChanged);
+    return () => window.removeEventListener('rpud-config-changed', handleRpudChanged);
+  }, [isCollege, viewMode, currentMonthDate, currentMonday, fetchMonthSchedule, fetchWeekSchedule]);
 
   // Listen for mobile pull-to-refresh
   useEffect(() => {
@@ -499,6 +531,17 @@ export const SchedulePage = () => {
               <h4 className="text-base sm:text-lg font-bold text-dark dark:text-white leading-snug break-words">
                 {asText(lesson.discipline) || asText(lesson.subject) || lesson.title || 'Учебное занятие'}
               </h4>
+
+              {/* College RPUD Theme */}
+              {isCollege && lesson.rpudTheme && (
+                <div className="mt-2 text-xs text-secondary dark:text-[#38BDF8] font-medium flex items-center space-x-1.5">
+                  <Icons.BookOpen size={14} className="shrink-0" />
+                  <span className="truncate">
+                    {lesson.rpudTheme.rawType ? `${lesson.rpudTheme.rawType}: ` : ''}
+                    {lesson.rpudTheme.lessonTitle || lesson.rpudTheme.themeTitle}
+                  </span>
+                </div>
+              )}
 
               {/* Bottom row: Auditory & Teacher */}
               {(lesson.auditory || lesson.teacher) && (

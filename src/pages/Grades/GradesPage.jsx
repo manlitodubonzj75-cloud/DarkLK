@@ -112,7 +112,15 @@ export const GradesPage = () => {
 
       setError(null);
       if (data && Array.isArray(data.disciplines) && data.disciplines.length > 0) {
-        setDisciplines(data.disciplines);
+        let finalDisciplines = data.disciplines;
+        if (isCollege) {
+          try {
+            finalDisciplines = await lkService.enrichDisciplinesWithThemes(data.disciplines);
+          } catch {
+            // keep unenriched on error
+          }
+        }
+        setDisciplines(finalDisciplines);
         setCurrentSemesterInfo({
           course: data.activeCourse,
           semester: data.activeSemester
@@ -140,6 +148,16 @@ export const GradesPage = () => {
       if (requestId === requestIdRef.current) setIsLoading(false);
     }
   };
+
+  // Re-fetch / re-enrich when RPUD configuration changes
+  useEffect(() => {
+    if (!isCollege) return;
+    const handleRpudChanged = () => {
+      loadGradesData({ forceRefresh: false });
+    };
+    window.addEventListener('rpud-config-changed', handleRpudChanged);
+    return () => window.removeEventListener('rpud-config-changed', handleRpudChanged);
+  }, [isCollege]);
 
   useEffect(() => {
     loadGradesData();
@@ -449,6 +467,12 @@ export const GradesPage = () => {
                                     Подгруппа {lesson.subgroup}
                                   </p>
                                 ) : null}
+                                {lesson.rpudTheme && (
+                                  <p className="text-[11px] text-secondary dark:text-[#38BDF8] font-medium truncate mt-0.5">
+                                    {lesson.rpudTheme.rawType ? (lesson.rpudTheme.rawType + ': ') : ''}
+                                    {lesson.rpudTheme.lessonTitle || lesson.rpudTheme.themeTitle}
+                                  </p>
+                                )}
                               </div>
                             </div>
 
